@@ -291,3 +291,4 @@ resultado = tk.Label(janela, text="", font=("Arial", 12, "bold"))
 resultado.pack(pady=5)
 
 janela.mainloop()
+
