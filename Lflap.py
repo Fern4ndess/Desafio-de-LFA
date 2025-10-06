@@ -1,6 +1,10 @@
+#---NESSA VERSÃO ESTOU ADICIONANDO BOTÕES"---
+
 import tkinter as tk
-from tkinter import messagebox # <-- NOVA LINHA
-from tkinter import simpledialog # <-- NOVA LINHA
+from tkinter import messagebox 
+from tkinter import simpledialog 
+from tkinter import filedialog 
+from PIL import Image, ImageTk # <-- NOVA LINHA v5
 import math
 
 # --- Classes ---
@@ -414,6 +418,36 @@ def alternar_modo():
         instrucoes.config(text="Clique para criar ou arrastar estados.")
     print(f"Modo alterado para: {modo_atual}")
 
+#---------------------------------------------- Adicionando v5 -------------------------------------- 
+
+# --- NOVO: Ativadores de modo específicos ---
+def ativar_modo_arrastar():
+    global modo_atual
+    modo_atual = "arrastar"
+    botao_modo.config(text="Modo Atual: Criar/Arrastar Estado")
+    instrucoes.config(text="Clique para criar ou arrastar estados.")
+    print("Modo alterado para: arrastar")
+
+def ativar_modo_transicao():
+    global modo_atual
+    modo_atual = "transicao"
+    botao_modo.config(text="Modo Atual: Criar Transição")
+    instrucoes.config(text="Clique em um estado de origem e depois no destino.")
+    print("Modo alterado para: transicao")
+
+def ativar_modo_apagar():
+    global modo_atual
+    modo_atual = "apagar"
+    botao_modo.config(text="Modo Atual: APAGAR")
+    instrucoes.config(text="CUIDADO: Clique em um estado ou transição para apagar.")
+    print("Modo alterado para: apagar")
+
+
+
+
+
+
+#------------------------------------------- FIM v5 --------------------------------------------
 
 def criar_novo_estado(x, y):
     global contador_estados
@@ -421,8 +455,13 @@ def criar_novo_estado(x, y):
     estado = Estado(nome_estado, x, y, canvas)
     estados[nome_estado] = estado
 
+    # Se for o primeiro estado, define como inicial
     if contador_estados == 0:
         estado.set_inicial()
+    else:
+        # Garante que não crie múltiplas setas de inicial sem querer
+        if not any(est.inicial for est in estados.values()):
+            estado.set_inicial()
 
     contador_estados += 1
 
@@ -538,137 +577,144 @@ def simular_passo_a_passo(palavra_restante, estado_atual):
     # Inicia a animação, passando a função "proximo_passo" como callback
     animar_token(token, estado_atual, estado_destino, proximo_passo)
 
+#----------------------------------- adicionando v4 ------------------------------------
 
-# --- NOVO: Função para calcular o fecho-ε ---
-def fecho_epsilon(estados_iniciais):
-    """
-    Retorna o fecho-ε de um conjunto de estados.
-    (todos os estados alcançáveis a partir de epsilon-transições)
-    """
-    visitados = set(estados_iniciais)
-    pilha = list(estados_iniciais)
+def novo_automato():
+    global estados, transicoes, contador_estados
+    canvas.delete("all")
+    estados = {}
+    transicoes = []
+    contador_estados = 0
+    resultado.config(text="")
+    instrucoes.config(text="Novo autômato criado.")
 
-    while pilha:
-        estado = pilha.pop()
-        for t in transicoes:
-            if t.origem == estado and t.simbolo == "ε":
-                if t.destino not in visitados:
-                    visitados.add(t.destino)
-                    pilha.append(t.destino)
-    return visitados
+def salvar_automato():
+    dados = {
+        "estados": [
+            {"nome": est.nome, "x": est.x, "y": est.y, "inicial": est.inicial, "aceitacao": est.aceitacao}
+            for est in estados.values()
+        ],
+        "transicoes": [
+            {"origem": t.origem.nome, "destino": t.destino.nome, "simbolo": t.simbolo}
+            for t in transicoes
+        ]
+    }
+    arquivo = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
+    if arquivo:
+        import json
+        with open(arquivo, "w", encoding="utf-8") as f:
+            json.dump(dados, f, indent=4)
+        instrucoes.config(text=f"Autômato salvo em {arquivo}")
 
-
-# --- NOVO: simular AFNe --------------------------------------------------------------
-
-
-def simular_palavra_afne():
-    """
-    Simula a palavra considerando AFNe (ε-transições e não-determinismo).
-    """
-    palavra = input_entry.get()
-    resultado.config(text="")  # limpa resultado anterior
-
-    # Estado(s) inicial(is)
-    estados_iniciais = [e for e in estados.values() if e.inicial]
-    if not estados_iniciais:
-        resultado.config(text="Erro: Nenhum estado inicial definido!", fg="orange")
+def abrir_automato():
+    global estados, transicoes, contador_estados
+    arquivo = filedialog.askopenfilename(filetypes=[("JSON files", "*.json")])
+    if not arquivo:
         return
+    import json
+    with open(arquivo, "r", encoding="utf-8") as f:
+        dados = json.load(f)
 
-    # --- NOVO: começa com o fecho-ε do inicial ---
-    estados_atuais = fecho_epsilon(estados_iniciais)
+    # Resetar
+    canvas.delete("all")
+    estados = {}
+    transicoes = []
+    contador_estados = 0
 
-    # Processar cada símbolo
-    for simbolo in palavra:
-        proximos_estados = set()
-        for estado in estados_atuais:
-            for t in transicoes:
-                if t.origem == estado and t.simbolo == simbolo:
-                    proximos_estados.add(t.destino)
+    # Recriar estados
+    for e in dados["estados"]:
+        estado = Estado(e["nome"], e["x"], e["y"], canvas)
+        estados[e["nome"]] = estado
+        if e["inicial"]:
+            estado.set_inicial()
+        if e["aceitacao"]:
+            estado.toggle_aceitacao()
+        contador_estados += 1
 
-        # --- NOVO: expandir fecho-ε dos próximos estados ---
-        estados_atuais = fecho_epsilon(proximos_estados)
+    # Recriar transições
+    for t in dados["transicoes"]:
+        origem = estados[t["origem"]]
+        destino = estados[t["destino"]]
+        transicoes.append(Transicao(origem, destino, canvas, t["simbolo"]))
 
-    # Verifica aceitação
-    if any(e.aceitacao for e in estados_atuais):
-        resultado.config(text="Palavra aceita ✅", fg="green")
-    else:
-        resultado.config(text="Palavra rejeitada ❌", fg="red")
-
-
-#TESTE AFN--------------------------
-
-def simular_palavra_afn():
-    """
-    Simula uma palavra em um AFN puro (sem ε-transições).
-    Mantém todo o seu código original intacto.
-    """
-    palavra = input_entry.get()
-    resultado.config(text="")  # limpa resultado anterior
-
-    # Conjunto de estados iniciais
-    estados_atuais = set()
-    for est in estados.values():
-        if est.inicial:
-            estados_atuais.add(est)
-
-    if not estados_atuais:
-        resultado.config(text="Erro: Nenhum estado inicial definido!", fg="orange")
-        return
-
-    simular_passos_afn(palavra, estados_atuais)
-
-def simular_passos_afn(palavra_restante, estados_atuais):
-    """
-    Executa um passo da simulação AFN.
-    palavra_restante: string com os símbolos restantes
-    estados_atuais: conjunto de objetos Estado
-    """
-    if not palavra_restante:
-        # palavra terminou, verifica aceitação
-        if any(e.aceitacao for e in estados_atuais):
-            resultado.config(text="Palavra aceita ✅", fg="green")
-        else:
-            resultado.config(text="Palavra rejeitada ❌", fg="red")
-        return
-
-    simbolo_atual = palavra_restante[0]
-    proxima_palavra = palavra_restante[1:]
-
-    # Conjunto de próximos estados possíveis
-    proximos_estados = set()
-    for est in estados_atuais:
-        for t in transicoes:
-            if t.origem == est and t.simbolo == simbolo_atual:
-                proximos_estados.add(t.destino)
-
-    if not proximos_estados:
-        resultado.config(text="Palavra rejeitada ❌ (transição não encontrada)", fg="red")
-        return
-
-    # Para animação, podemos apenas pegar um token do primeiro estado para o primeiro destino
-    estado_origem = next(iter(estados_atuais))
-    estado_destino = next(iter(proximos_estados))
-    raio_token = 5
-    token = canvas.create_oval(
-        estado_origem.x - raio_token, estado_origem.y - raio_token,
-        estado_origem.x + raio_token, estado_origem.y + raio_token,
-        fill="red", outline="black"
-    )
-
-    # Callback continua para o próximo passo
-    callback = lambda: simular_passos_afn(proxima_palavra, proximos_estados)
-
-    animar_token(token, estado_origem, estado_destino, callback)
+    instrucoes.config(text=f"Autômato carregado de {arquivo}")
 
 
 
+#----------------------------------fim v4-----------------------------------------------
 
-#-------------------------- mudei até aqui ------------------------------
 
 # --- Janela ---
 janela = tk.Tk()
 janela.title("Mini-JFLAP em Python")
 janela.geometry("800x700")
+
+#------------------------------- adicionando MENU em v4 ------------------------------------
+menu_bar = tk.Menu(janela)
+
+# Menu Arquivo
+menu_arquivo = tk.Menu(menu_bar, tearoff=0)
+menu_arquivo.add_command(label="Novo", command=novo_automato)
+menu_arquivo.add_command(label="Abrir", command=abrir_automato)
+menu_arquivo.add_command(label="Salvar como...", command=salvar_automato)
+menu_arquivo.add_separator()
+menu_arquivo.add_command(label="Sair", command=janela.quit)
+
+menu_bar.add_cascade(label="Arquivo", menu=menu_arquivo)
+
+# Ativar menu
+janela.config(menu=menu_bar)
+
+#------------------------------------- fim MENU v4 --------------------------------------------
+
+#------------------------------- adicionando BOTOES em v4 -------------------------------------
+
+# Criar uma barra de ferramentas
+toolbar = tk.Frame(janela, bd=1, relief=tk.RAISED)
+toolbar.pack(side=tk.TOP, fill=tk.X)
+
+# Tenta carregar ícones; se falhar, usa texto nos botões
+try:
+    icone_estado = Image.open("estado.png").resize((35, 35))
+    icone_estado = ImageTk.PhotoImage(icone_estado)
+    icone_transicao = Image.open("transicao.png").resize((35, 35))
+    icone_transicao = ImageTk.PhotoImage(icone_transicao)
+    icone_apagar = Image.open("apagar.png").resize((35, 35))
+    icone_apagar = ImageTk.PhotoImage(icone_apagar)
+    usar_icone = True
+except Exception as e:
+    print("Aviso: não foi possível carregar ícones (estado.png / transicao.png). Usando botões texto.\nErro:", e)
+    usar_icone = False
+
+# Botão para criar estados
+if usar_icone:
+    btn_estado = tk.Button(toolbar, image=icone_estado, relief=tk.FLAT, command=ativar_modo_arrastar)
+    btn_estado.image = icone_estado
+else:
+    btn_estado = tk.Button(toolbar, text="Estado", relief=tk.FLAT, command=ativar_modo_arrastar)
+btn_estado.pack(side=tk.LEFT, padx=2, pady=2)
+
+# Botão para criar transições
+if usar_icone:
+    btn_transicao = tk.Button(toolbar, image=icone_transicao, relief=tk.FLAT, command=ativar_modo_transicao)
+    btn_transicao.image = icone_transicao
+else:
+    btn_transicao = tk.Button(toolbar, text="Transição", relief=tk.FLAT, command=ativar_modo_transicao)
+btn_transicao.pack(side=tk.LEFT, padx=2, pady=2)
+
+# Botao para apagar estados
+if usar_icone:
+    btn_apagar = tk.Button(toolbar, image=icone_apagar, relief=tk.FLAT, command=ativar_modo_apagar)
+    btn_apagar.image = icone_apagar
+else:
+    btn_apagar = tk.Button(toolbar, text="Apagar", relief=tk.FLAT, command=ativar_modo_apagar)
+btn_apagar.pack(side=tk.LEFT, padx=2, pady=2)
+
+
+
+
+
+#----------------------------------------fim BOTOES v4 ----------------------------------------
 
 canvas = tk.Canvas(janela, bg="white", highlightthickness=1, highlightbackground="black")
 canvas.pack(fill="both", expand=True, padx=10, pady=10)
