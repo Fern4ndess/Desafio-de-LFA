@@ -539,6 +539,132 @@ def simular_passo_a_passo(palavra_restante, estado_atual):
     animar_token(token, estado_atual, estado_destino, proximo_passo)
 
 
+# --- NOVO: Função para calcular o fecho-ε ---
+def fecho_epsilon(estados_iniciais):
+    """
+    Retorna o fecho-ε de um conjunto de estados.
+    (todos os estados alcançáveis a partir de epsilon-transições)
+    """
+    visitados = set(estados_iniciais)
+    pilha = list(estados_iniciais)
+
+    while pilha:
+        estado = pilha.pop()
+        for t in transicoes:
+            if t.origem == estado and t.simbolo == "ε":
+                if t.destino not in visitados:
+                    visitados.add(t.destino)
+                    pilha.append(t.destino)
+    return visitados
+
+
+# --- NOVO: simular AFNe --------------------------------------------------------------
+
+
+def simular_palavra_afne():
+    """
+    Simula a palavra considerando AFNe (ε-transições e não-determinismo).
+    """
+    palavra = input_entry.get()
+    resultado.config(text="")  # limpa resultado anterior
+
+    # Estado(s) inicial(is)
+    estados_iniciais = [e for e in estados.values() if e.inicial]
+    if not estados_iniciais:
+        resultado.config(text="Erro: Nenhum estado inicial definido!", fg="orange")
+        return
+
+    # --- NOVO: começa com o fecho-ε do inicial ---
+    estados_atuais = fecho_epsilon(estados_iniciais)
+
+    # Processar cada símbolo
+    for simbolo in palavra:
+        proximos_estados = set()
+        for estado in estados_atuais:
+            for t in transicoes:
+                if t.origem == estado and t.simbolo == simbolo:
+                    proximos_estados.add(t.destino)
+
+        # --- NOVO: expandir fecho-ε dos próximos estados ---
+        estados_atuais = fecho_epsilon(proximos_estados)
+
+    # Verifica aceitação
+    if any(e.aceitacao for e in estados_atuais):
+        resultado.config(text="Palavra aceita ✅", fg="green")
+    else:
+        resultado.config(text="Palavra rejeitada ❌", fg="red")
+
+
+#TESTE AFN--------------------------
+
+def simular_palavra_afn():
+    """
+    Simula uma palavra em um AFN puro (sem ε-transições).
+    Mantém todo o seu código original intacto.
+    """
+    palavra = input_entry.get()
+    resultado.config(text="")  # limpa resultado anterior
+
+    # Conjunto de estados iniciais
+    estados_atuais = set()
+    for est in estados.values():
+        if est.inicial:
+            estados_atuais.add(est)
+
+    if not estados_atuais:
+        resultado.config(text="Erro: Nenhum estado inicial definido!", fg="orange")
+        return
+
+    simular_passos_afn(palavra, estados_atuais)
+
+def simular_passos_afn(palavra_restante, estados_atuais):
+    """
+    Executa um passo da simulação AFN.
+    palavra_restante: string com os símbolos restantes
+    estados_atuais: conjunto de objetos Estado
+    """
+    if not palavra_restante:
+        # palavra terminou, verifica aceitação
+        if any(e.aceitacao for e in estados_atuais):
+            resultado.config(text="Palavra aceita ✅", fg="green")
+        else:
+            resultado.config(text="Palavra rejeitada ❌", fg="red")
+        return
+
+    simbolo_atual = palavra_restante[0]
+    proxima_palavra = palavra_restante[1:]
+
+    # Conjunto de próximos estados possíveis
+    proximos_estados = set()
+    for est in estados_atuais:
+        for t in transicoes:
+            if t.origem == est and t.simbolo == simbolo_atual:
+                proximos_estados.add(t.destino)
+
+    if not proximos_estados:
+        resultado.config(text="Palavra rejeitada ❌ (transição não encontrada)", fg="red")
+        return
+
+    # Para animação, podemos apenas pegar um token do primeiro estado para o primeiro destino
+    estado_origem = next(iter(estados_atuais))
+    estado_destino = next(iter(proximos_estados))
+    raio_token = 5
+    token = canvas.create_oval(
+        estado_origem.x - raio_token, estado_origem.y - raio_token,
+        estado_origem.x + raio_token, estado_origem.y + raio_token,
+        fill="red", outline="black"
+    )
+
+    # Callback continua para o próximo passo
+    callback = lambda: simular_passos_afn(proxima_palavra, proximos_estados)
+
+    animar_token(token, estado_origem, estado_destino, callback)
+
+
+
+
+#-------------------------- mudei até aqui ------------------------------
+
 # --- Janela ---
 janela = tk.Tk()
 janela.title("Mini-JFLAP em Python")
