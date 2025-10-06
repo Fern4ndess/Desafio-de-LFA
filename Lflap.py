@@ -1,8 +1,13 @@
+#nessa versão adicionamos a compatibilidade de arquivos com jflap
+
 import tkinter as tk
 from tkinter import messagebox, simpledialog, filedialog, colorchooser
 from PIL import Image, ImageTk
 import json
 import math
+import xml.etree.ElementTree as ET 
+from xml.dom import minidom
+import csv # <-- NOVA LINHA v11
 
 # --- Classes ---
 class Estado:
@@ -54,7 +59,6 @@ class Estado:
     def destruir(self):
         self.canvas.delete(self.nome)
 
-    # Dentro da class Estado
     def atualizar_texto(self):
         """Atualiza o texto do estado no canvas para incluir a saída (se aplicável)."""
         texto_display = self.nome
@@ -62,6 +66,12 @@ class Estado:
         if tipo_automato_atual == "Moore" and self.simbolo_saida:
             texto_display = f"{self.nome}/{self.simbolo_saida}"
         self.canvas.itemconfig(self.id_texto, text=texto_display)
+
+    def selecionar(self):
+        self.canvas.itemconfig(self.id_circulo, outline="green", width=3)
+    def desselecionar(self):
+        self.canvas.itemconfig(self.id_circulo, outline="black", width=2)
+
 
 class Transicao:
     def __init__(self, origem, destino, canvas, simbolos_entrada="ε", simbolo_saida="", offset_x=0, offset_y=0):
@@ -136,6 +146,13 @@ class Transicao:
     def destruir(self):
         self.canvas.delete(self.tag_unica)
 
+    def selecionar(self):
+        self.canvas.itemconfig(self.tag_unica, fill="green")
+    def desselecionar(self):
+        # O redesenho completo é a forma mais segura de restaurar a cor
+        self.atualizar_posicao()
+
+
 # --- Variáveis Globais ---
 contador_estados = 0
 estados = {}
@@ -145,6 +162,9 @@ modo_atual = "arrastar"
 transicao_info = {"origem": None}
 caminho_arquivo_atual = None
 tipo_automato_atual = "AFNe"
+itens_selecionados = set()
+caixa_selecao = None
+
 
 # --- Funções "Detetive" ---
 def encontrar_estado_clicado(event):
@@ -155,11 +175,17 @@ def encontrar_estado_clicado(event):
     tag_nome = next((tag for tag in tags_do_item if tag not in tags_de_sistema), None)
     return estados.get(tag_nome)
 
+
 # --- Funções de Interação e UI ---
 def iniciar_movimento(event):
+    global caixa_selecao
+    
+    # Prioridade 1: O modo apagar tem suas próprias regras.
     if modo_atual == "apagar":
         gerenciar_clique_apagar(event)
         return
+
+    # Prioridade 2: Editar uma transição com um clique, em qualquer outro modo.
     itens_proximos = canvas.find_closest(event.x, event.y)
     if itens_proximos:
         id_item_clicado = itens_proximos[0]
@@ -167,8 +193,40 @@ def iniciar_movimento(event):
         if "transicao" in tags or "rotulo" in tags:
             editar_rotulo_transicao(id_item_clicado)
             return
+
+    # --- LÓGICA DE MODOS CORRIGIDA ---
     if modo_atual == "arrastar":
-        gerenciar_clique_arrastar(event)
+        estado_clicado = encontrar_estado_clicado(event)
+        if estado_clicado:
+            dist = math.dist((event.x, event.y), (estado_clicado.x, estado_clicado.y))
+            if dist <= estado_clicado.raio:
+                objeto_arrastado["id"] = estado_clicado
+                objeto_arrastado["x_inicial"], objeto_arrastado["y_inicial"] = event.x, event.y
+            else:
+                criar_novo_estado(event.x, event.y)
+        else:
+            criar_novo_estado(event.x, event.y)
+            
+    elif modo_atual == "selecao":
+        estado_clicado = encontrar_estado_clicado(event)
+        distancia_do_clique = math.inf
+        if estado_clicado:
+            distancia_do_clique = math.dist((event.x, event.y), (estado_clicado.x, estado_clicado.y))
+
+        # CONDIÇÃO CORRIGIDA:
+        # Se o usuário clicou DENTRO de um estado que JÁ ESTAVA selecionado...
+        if estado_clicado and estado_clicado in itens_selecionados and distancia_do_clique <= estado_clicado.raio:
+            # ...prepara para um arraste em grupo.
+            objeto_arrastado["id"] = "grupo"
+            objeto_arrastado["x_inicial"], objeto_arrastado["y_inicial"] = event.x, event.y
+        else:
+            # Em TODOS os outros casos (clique no fundo, clique fora de um estado, etc.)...
+            # ...começa uma nova seleção.
+            for item in itens_selecionados: item.desselecionar()
+            itens_selecionados.clear()
+            caixa_selecao = canvas.create_rectangle(event.x, event.y, event.x, event.y, outline="blue", dash=(3, 5))
+            objeto_arrastado["x_inicial"], objeto_arrastado["y_inicial"] = event.x, event.y
+
     elif modo_atual == "transicao":
         gerenciar_clique_transicao(event)
 
@@ -300,14 +358,56 @@ def gerenciar_clique_apagar(event):
             status_acao.config(text="Transição apagada com sucesso.")
 
 def arrastar_objeto(event):
-    if objeto_arrastado["id"]:
+    # Se estamos arrastando um único estado (no modo arrastar)
+    if modo_atual == "arrastar" and isinstance(objeto_arrastado.get("id"), Estado):
+        # ... (a lógica de arrastar um único estado continua a mesma)
         estado = objeto_arrastado["id"]
         dx, dy = event.x - objeto_arrastado["x_inicial"], event.y - objeto_arrastado["y_inicial"]
         estado.mover(dx, dy)
         objeto_arrastado["x_inicial"], objeto_arrastado["y_inicial"] = event.x, event.y
         atualizar_transicoes_conectadas(estado)
+        
+    # Se estamos desenhando a caixa de seleção
+    elif modo_atual == "selecao" and caixa_selecao:
+        x0, y0 = objeto_arrastado["x_inicial"], objeto_arrastado["y_inicial"]
+        canvas.coords(caixa_selecao, x0, y0, event.x, event.y)
+
+    # --- NOVIDADE AQUI: LÓGICA PARA ARRASTAR O GRUPO ---
+    elif modo_atual == "selecao" and objeto_arrastado.get("id") == "grupo":
+        dx, dy = event.x - objeto_arrastado["x_inicial"], event.y - objeto_arrastado["y_inicial"]
+        
+        # Move CADA estado na lista de selecionados
+        for estado in itens_selecionados:
+            estado.mover(dx, dy)
+        
+        # Atualiza as transições para TODOS os estados movidos
+        for estado in itens_selecionados:
+            atualizar_transicoes_conectadas(estado)
+            
+        # Atualiza a posição inicial para o próximo movimento
+        objeto_arrastado["x_inicial"], objeto_arrastado["y_inicial"] = event.x, event.y
 
 def finalizar_arraste(event):
+    global caixa_selecao
+
+    # Finaliza a seleção em área
+    if modo_atual == "selecao" and caixa_selecao:
+        coords_caixa = canvas.coords(caixa_selecao)
+        ids_na_caixa = canvas.find_enclosed(*coords_caixa)
+        
+        for item_id in ids_na_caixa:
+            tags = canvas.gettags(item_id)
+            if "estado" in tags:
+                nome_estado = next((t for t in tags if not t.startswith("trans_") and t not in ["estado", "texto", "rotulo", "aceitacao"]), None)
+                if nome_estado and estados[nome_estado] not in itens_selecionados:
+                    estado = estados[nome_estado]
+                    estado.selecionar()
+                    itens_selecionados.add(estado)
+
+        canvas.delete(caixa_selecao)
+        caixa_selecao = None
+    
+    # Reseta o objeto arrastado em qualquer caso
     objeto_arrastado["id"] = None
 
 def criar_novo_estado(x, y):
@@ -335,40 +435,51 @@ def atualizar_transicoes_conectadas(estado_movido):
             transicao.atualizar_posicao()
 
 def mostrar_menu_contexto(event):
-    """Exibe o menu de contexto apropriado para o modo e o item clicado."""
+    """
+    Exibe um menu de contexto inteligente: se o item clicado faz parte
+    de uma seleção, as ações são aplicadas ao grupo.
+    """
     estado_clicado = encontrar_estado_clicado(event)
-    
-    if estado_clicado:
-        menu_contexto = tk.Menu(janela, tearoff=0)
-        
-        # --- LÓGICA CONTEXTUAL ---
-        # Só adiciona a opção de "Aceitação" se NÃO estivermos no modo Mealy
-        if tipo_automato_atual not in ["Mealy","Moore"]:
-            menu_contexto.add_command(
-                label="Marcar/Desmarcar como Aceitação", command=estado_clicado.toggle_aceitacao
-            )
+    if not estado_clicado: return
 
-        # --- NOVIDADE AQUI ---
-        # Opção de Saída do Estado (apenas para Moore)
-        if tipo_automato_atual == "Moore":
-            menu_contexto.add_command(label="Definir Saída do Estado...", command=lambda: definir_saida_estado(estado_clicado))
-        
-        # As outras opções aparecem em todos os modos
+    menu_contexto = tk.Menu(janela, tearoff=0)
+
+    # Verifica se o clique foi em um item de uma seleção de grupo
+    acao_em_grupo = estado_clicado in itens_selecionados and len(itens_selecionados) > 1
+
+    # --- MONTAGEM DO MENU CONTEXTUAL ---
+
+    if acao_em_grupo:
+        # --- MENU PARA AÇÕES EM GRUPO ---
         menu_contexto.add_command(
-            label="Renomear Estado...",
-            command=lambda: renomear_estado(estado_clicado)
+            label=f"Marcar/Desmarcar Aceitação ({len(itens_selecionados)} itens)",
+            command=toggle_aceitacao_selecao
         )
+        # Ação de renomear é desabilitada para grupos
+        menu_contexto.add_command(label="Renomear Estados...", state="disabled")
         menu_contexto.add_command(
-            label="Alterar Cor...",
-            command=lambda: mudar_cor_estado(estado_clicado)
+            label=f"Alterar Cor ({len(itens_selecionados)} itens)...",
+            command=mudar_cor_selecao
         )
         menu_contexto.add_separator()
         menu_contexto.add_command(
-            label="Apagar Estado",
-            command=lambda: apagar_estado(estado_clicado)
+            label=f"Apagar {len(itens_selecionados)} Estados Selecionados",
+            command=apagar_selecao # Usamos a função que já existe!
         )
+    else:
+        # --- MENU PARA AÇÃO INDIVIDUAL (comportamento antigo) ---
+        if tipo_automato_atual not in ["Mealy", "Moore"]:
+            menu_contexto.add_command(label="Marcar/Desmarcar como Aceitação", command=estado_clicado.toggle_aceitacao)
+        if tipo_automato_atual == "Moore":
+            menu_contexto.add_command(label="Definir Saída do Estado...", command=lambda: definir_saida_estado(estado_clicado))
         
-        menu_contexto.post(event.x_root, event.y_root)
+        menu_contexto.add_command(label="Renomear Estado...", command=lambda: renomear_estado(estado_clicado))
+        menu_contexto.add_command(label="Alterar Cor...", command=lambda: mudar_cor_estado(estado_clicado))
+        menu_contexto.add_separator()
+        menu_contexto.add_command(label="Apagar Estado", command=lambda: apagar_estado(estado_clicado))
+
+    # Exibe o menu montado
+    menu_contexto.post(event.x_root, event.y_root)
 
 def atualizar_status_modo():
     """Atualiza o texto do painel de status da esquerda com o modo e tipo atuais."""
@@ -454,7 +565,11 @@ def gerenciar_atalhos_teclado(event):
     elif event.keysym == "F2":
         ativar_modo_transicao()
     elif event.keysym == "F3":
+        ativar_modo_selecao()
+    elif event.keysym == "F4":
         ativar_modo_apagar()
+    elif event.keysym == "Delete" and itens_selecionados:
+        apagar_selecao()
 
 def gerenciar_clique_duplo(event):
     """
@@ -485,21 +600,98 @@ def gerenciar_clique_duplo(event):
 # --- Funções de Modo e Tipo ---
 def ativar_modo_arrastar():
     global modo_atual
+    limpar_selecao() # Limpa a seleção ao entrar neste modo
     modo_atual = "arrastar"
-    atualizar_status_modo() # <-- USA A NOVA FUNÇÃO
+    atualizar_status_modo()
     print("Modo alterado para: arrastar")
 
 def ativar_modo_transicao():
     global modo_atual
+    limpar_selecao() # Limpa a seleção ao entrar neste modo
     modo_atual = "transicao"
-    atualizar_status_modo() # <-- USA A NOVA FUNÇÃO
+    atualizar_status_modo()
     print("Modo alterado para: transicao")
 
 def ativar_modo_apagar():
     global modo_atual
+    limpar_selecao() # Limpa a seleção ao entrar neste modo
     modo_atual = "apagar"
-    atualizar_status_modo() # <-- USA A NOVA FUNÇÃO
+    atualizar_status_modo()
     print("Modo alterado para: apagar")
+
+def ativar_modo_selecao():
+    global modo_atual
+    modo_atual = "selecao"
+    atualizar_status_modo() # Atualiza o painel de status
+    print("Modo alterado para: selecao")
+def limpar_selecao():
+    """
+    Desseleciona todos os itens visualmente e limpa o conjunto de
+    itens selecionados na memória.
+    """
+    if itens_selecionados:
+        for item in itens_selecionados:
+            item.desselecionar()
+        itens_selecionados.clear()
+        print("Seleção limpa.")
+def apagar_selecao():
+    """
+    Verifica se há itens selecionados e, após confirmação, apaga todos
+    os estados selecionados e suas transições conectadas.
+    """
+    # Se não há nada selecionado, não faz nada
+    if not itens_selecionados:
+        return
+
+    # Pede confirmação ao usuário, informando quantos itens serão apagados
+    confirmar = messagebox.askyesno(
+        "Apagar Seleção",
+        f"Tem certeza que deseja apagar os {len(itens_selecionados)} estados selecionados?\n"
+        "Todas as transições conectadas a eles também serão apagadas."
+    )
+
+    if confirmar:
+        estados_para_apagar = set(itens_selecionados)
+        transicoes_para_apagar = set()
+
+        # Encontra todas as transições conectadas aos estados selecionados
+        for t in transicoes:
+            if t.origem in estados_para_apagar or t.destino in estados_para_apagar:
+                transicoes_para_apagar.add(t)
+        
+        # Apaga as transições encontradas
+        for t in transicoes_para_apagar:
+            t.destruir()
+            if t in transicoes:
+                transicoes.remove(t)
+
+        # Apaga os estados selecionados
+        for estado in estados_para_apagar:
+            nome_estado = estado.nome
+            estado.destruir()
+            if nome_estado in estados:
+                del estados[nome_estado]
+        
+        # Limpa a memória de seleção
+        itens_selecionados.clear()
+        status_acao.config(text=f"{len(estados_para_apagar)} estados foram apagados.")
+def atalho_apagar_selecao(event):
+    """Função adaptadora para o atalho da tecla Delete."""
+    apagar_selecao()
+def toggle_aceitacao_selecao():
+    """Alterna o estado de aceitação para todos os estados selecionados."""
+    if not itens_selecionados: return
+    for estado in itens_selecionados:
+        estado.toggle_aceitacao()
+    status_acao.config(text=f"Estado de aceitação alterado para {len(itens_selecionados)} itens.")
+def mudar_cor_selecao():
+    """Muda a cor de todos os estados selecionados."""
+    if not itens_selecionados: return
+    nova_cor = colorchooser.askcolor(title="Escolha a cor para a seleção") # Caixa de diálogo
+    if nova_cor and nova_cor[1]:
+        for estado in itens_selecionados:
+            canvas.itemconfig(estado.id_circulo, fill=nova_cor[1]) # Muda a cor do círculo
+        status_acao.config(text=f"Cor alterada para {len(itens_selecionados)} itens.") # Mensagem de ação
 
 def definir_tipo_automato(novo_tipo):
     global tipo_automato_atual
@@ -579,30 +771,36 @@ def simular_palavra():
     
     estado_inicial = next((est for est in estados.values() if est.inicial), None)
     if not estado_inicial:
-        resultado.config(text="Erro: Nenhum estado inicial definido!", fg="orange")
+        # ...
         return
+    
+    # Cria a lista de histórico vazia para a simulação
+    historico = []
         
     if tipo_automato_atual == "AFD":
-        is_valido, msg_erro = validar_automato_como_AFD()
-        if not is_valido:
-            messagebox.showerror("Autômato Inválido", f"Este não é um AFD válido.\n\nMotivo: {msg_erro}")
-            resultado.config(text="")
-            return
+        # ...
         simular_passo_a_passo_AFD(palavra, estado_inicial)
 
-    elif tipo_automato_atual in ["AFNe", "AFN"]: # <-- AGRUPAMOS OS DOIS AQUI
+    elif tipo_automato_atual in ["AFNe", "AFN"]:
         estados_atuais = calcular_fecho_epsilon({estado_inicial})
+        # A simulação de AFNe não gera relatório de saída, então não passamos o histórico
         simular_passo_a_passo_AFNe(palavra, estados_atuais, "")
-        
+
     elif tipo_automato_atual == "Mealy":
-        # Inicia o motor de simulação de Mealy
-        simular_passo_a_passo_Mealy(palavra, estado_inicial, "")
+        # Inicia a simulação passando o histórico vazio
+        simular_passo_a_passo_Mealy(palavra, estado_inicial, "", historico)
 
     elif tipo_automato_atual == "Moore":
-        # Lógica inicial para Moore: a primeira saída é a do estado inicial
         saida_inicial = estado_inicial.simbolo_saida
         sequencia_saida.config(text=f"Saída: {saida_inicial}")
-        simular_passo_a_passo_Moore(palavra, estado_inicial, saida_inicial)
+        # Adiciona o passo 0 (inicial) ao histórico de Moore
+        passo_zero = {
+            "Passo": 0, "Estado Atual": estado_inicial.nome, "Lendo Símbolo": "",
+            "Saída Gerada": saida_inicial, "Próximo Estado": estado_inicial.nome
+        }
+        historico.append(passo_zero)
+        # Inicia a simulação passando o histórico com o primeiro passo
+        simular_passo_a_passo_Moore(palavra, estado_inicial, saida_inicial, historico)
 
 def simular_passo_a_passo_AFD(palavra_restante, estado_atual):
     canvas.itemconfig(estado_atual.id_circulo, outline="blue", width=3)
@@ -656,25 +854,25 @@ def simular_passo_a_passo_AFNe(palavra_restante, estados_atuais, saida_acumulada
         simular_passo_a_passo_AFNe(proxima_palavra, proximos_estados_finais, nova_saida_acumulada)
     janela.after(700, ir_para_proximo_passo)
 
-def simular_passo_a_passo_Mealy(palavra_restante, estado_atual, saida_acumulada):
+def simular_passo_a_passo_Mealy(palavra_restante, estado_atual, saida_acumulada, historico_passos):
     """
     Motor de simulação para Máquinas de Mealy, com realce de estados e transições.
-    (Versão sem o token animado).
     """
-    # Limpa realces anteriores e realça o estado atual
+    # Limpa realces anteriores e realça o estado atual em azul
     for est in estados.values(): canvas.itemconfig(est.id_circulo, outline="black", width=2)
     canvas.itemconfig(estado_atual.id_circulo, outline="blue", width=3)
 
-    # Função de limpeza robusta para o final da simulação
+    # Função de limpeza para o final
     def limpar_realces_finais():
         for est in estados.values():
             canvas.itemconfig(est.id_circulo, outline="black", width=2)
 
-    # Fim da palavra, a simulação termina
+    # Fim da simulação
     if not palavra_restante:
         resultado.config(text="Simulação concluída!", fg="blue")
         sequencia_saida.config(text=f"Saída Final: {saida_acumulada}")
-        janela.after(2000, limpar_realces_finais) # Limpa TUDO após 2s
+        janela.after(500, lambda: salvar_saida_em_arquivo(input_entry.get(), historico_passos))
+        janela.after(2000, limpar_realces_finais)
         return
 
     simbolo_atual = palavra_restante[0]
@@ -684,72 +882,72 @@ def simular_passo_a_passo_Mealy(palavra_restante, estado_atual, saida_acumulada)
             
     if not transicao_encontrada:
         resultado.config(text=f"Rejeitada ❌ (transição inválida para '{simbolo_atual}')", fg="red")
-        janela.after(2000, limpar_realces_finais) # Limpa TUDO após 2s
+        janela.after(2000, limpar_realces_finais)
         return
 
     estado_destino = transicao_encontrada.destino
     nova_saida_acumulada = saida_acumulada + transicao_encontrada.simbolo_saida
     
-    # Realça a transição que está sendo usada
+    # Registra o passo no histórico
+    passo_info = {
+        "Passo": len(historico_passos) + 1, "Estado Atual": estado_atual.nome,
+        "Lendo Símbolo": simbolo_atual, "Saída Gerada": transicao_encontrada.simbolo_saida,
+        "Próximo Estado": estado_destino.nome
+    }
+    historico_passos.append(passo_info)
+    
+    # Realça a transição usada
     canvas.itemconfig(transicao_encontrada.tag_unica, fill="red")
     
-    # Atualiza a UI
+    # ATUALIZA A UI A CADA PASSO
     status_acao.config(text=f"Lendo '{simbolo_atual}', gerando '{transicao_encontrada.simbolo_saida}'...")
     sequencia_saida.config(text=f"Saída: {nova_saida_acumulada}")
     
     def ir_para_proximo_passo():
-        # Restaura a cor da transição
         canvas.itemconfig(transicao_encontrada.tag_unica, fill="black")
-        # Chama a si mesma para o próximo passo
-        simular_passo_a_passo_Mealy(proxima_palavra, estado_destino, nova_saida_acumulada)
+        simular_passo_a_passo_Mealy(proxima_palavra, estado_destino, nova_saida_acumulada, historico_passos)
 
-    # Pausa para o usuário ver o que aconteceu antes do próximo passo
     janela.after(800, ir_para_proximo_passo)
 
-def simular_passo_a_passo_Moore(palavra_restante, estado_atual, saida_acumulada):
-    """Motor de simulação para Moore, com realce de estados e transições (SEM token)."""
-    # Limpa realces anteriores e realça o estado atual em azul
-    for est in estados.values():
-        canvas.itemconfig(est.id_circulo, outline="black", width=2)
-    canvas.itemconfig(estado_atual.id_circulo, outline="blue", width=3)
-    status_acao.config(text=f"No estado '{estado_atual.nome}', gerando saída '{estado_atual.simbolo_saida}'")
+def simular_passo_a_passo_Moore(palavra_restante, estado_atual, saida_acumulada, historico_passos):
+    # ... (o início e a limpeza continuam iguais)
 
-    # Função de limpeza robusta para garantir que tudo volte ao normal no final
-    def limpar_realces_finais():
-        for est in estados.values():
-            canvas.itemconfig(est.id_circulo, outline="black", width=2)
-
-    # Se a palavra acabou, finaliza a simulação
     if not palavra_restante:
-        resultado.config(text="Simulação concluída!", fg="blue")
-        sequencia_saida.config(text=f"Saída Final: {saida_acumulada}")
-        janela.after(2000, limpar_realces_finais)
+        # ... (configura o resultado final)
+        # Chama a nova função de salvar com o histórico completo
+        janela.after(500, lambda: salvar_saida_em_arquivo(input_entry.get(), historico_passos))
+        janela.after(2000, lambda: [canvas.itemconfig(e.id_circulo, outline="black", width=2) for e in estados.values()])
         return
 
     simbolo_atual = palavra_restante[0]
     proxima_palavra = palavra_restante[1:]
-
+    
     transicao_encontrada = next((t for t in transicoes if t.origem == estado_atual and simbolo_atual in t.simbolos_entrada), None)
-
+            
     if not transicao_encontrada:
-        resultado.config(text=f"Rejeitada ❌ (transição inválida para '{simbolo_atual}')", fg="red")
-        janela.after(2000, limpar_realces_finais)
+        # ... (lógica de rejeição continua igual)
         return
 
-    # Realça em vermelho a transição que será usada
-    canvas.itemconfig(transicao_encontrada.tag_unica, fill="red")
-    
     estado_destino = transicao_encontrada.destino
     nova_saida_acumulada = saida_acumulada + estado_destino.simbolo_saida
-    
-    # Prepara a chamada para o próximo passo
-    def ir_para_proximo_passo():
-        # Restaura a cor da transição
-        canvas.itemconfig(transicao_encontrada.tag_unica, fill="black")
-        # Chama a si mesma recursivamente
-        simular_passo_a_passo_Moore(proxima_palavra, estado_destino, nova_saida_acumulada)
 
-    # Usa janela.after para criar uma pausa, em vez de animar o token
+    # --- NOVIDADE AQUI: REGISTRA O PASSO ---
+    passo_info = {
+        "Passo": len(historico_passos) + 1,
+        "Estado Atual": estado_atual.nome,
+        "Lendo Símbolo": simbolo_atual,
+        "Saída Gerada": estado_destino.simbolo_saida, # Saída de Moore é do estado de destino
+        "Próximo Estado": estado_destino.nome
+    }
+    historico_passos.append(passo_info)
+    
+    # ... (realce e atualização da UI continuam iguais)
+    
+    def ir_para_proximo_passo():
+        # ...
+        # Passa o histórico atualizado para o próximo passo
+        simular_passo_a_passo_Moore(proxima_palavra, estado_destino, nova_saida_acumulada, historico_passos)
+
     janela.after(800, ir_para_proximo_passo)
 
 
@@ -782,10 +980,104 @@ def salvar():
 
 def salvar_como():
     global caminho_arquivo_atual
-    arquivo = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
+    arquivo = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json"), ("JFLAP files", "*.jff")])
     if arquivo:
         caminho_arquivo_atual = arquivo
         _salvar_dados_no_arquivo(caminho_arquivo_atual)
+    if caminho_arquivo_atual.lower().endswith('.jff'):
+            exportar_para_jflap_xml(caminho_arquivo_atual)
+    else: 
+            _salvar_dados_no_arquivo(caminho_arquivo_atual)
+
+def salvar_saida_em_arquivo(palavra_entrada, historico_passos):
+    """
+    Pergunta ao usuário se deseja salvar o histórico da simulação e, se sim,
+    abre um diálogo para salvar em um arquivo .csv formatado para o Excel.
+    """
+    if not historico_passos: return
+
+    string_saida = "".join([passo["Saída Gerada"] for passo in historico_passos])
+    
+    confirmar = messagebox.askyesno(
+        "Salvar Relatório de Simulação",
+        f"A simulação para a entrada '{palavra_entrada}' gerou a saída: '{string_saida}'\n\n"
+        "Deseja salvar um relatório detalhado (.csv)?"
+    )
+    
+    if confirmar:
+        nome_sugerido = f"relatorio_{palavra_entrada}.csv" if palavra_entrada else "relatorio.csv"
+        arquivo = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("Arquivo CSV", "*.csv"), ("Todos os arquivos", "*.*")],
+            initialfile=nome_sugerido
+        )
+        
+        if arquivo:
+            try:
+                # --- CORREÇÕES APLICADAS AQUI ---
+                # Usamos 'utf-8-sig' para ajudar o Excel a entender os acentos
+                # E 'newline=""' que é uma boa prática para arquivos csv
+                with open(arquivo, "w", encoding="utf-8-sig", newline="") as f:
+                    # Usamos delimiter=';' para separar as colunas corretamente no Excel
+                    writer = csv.writer(f, delimiter=';')
+                    
+                    writer.writerow(["Palavra de Entrada", palavra_entrada])
+                    writer.writerow(["Palavra de Saída", string_saida])
+                    writer.writerow([])
+                    
+                    headers = historico_passos[0].keys()
+                    writer.writerow(headers)
+                    
+                    for passo in historico_passos:
+                        writer.writerow(passo.values())
+                        
+                status_acao.config(text=f"Relatório salvo em {arquivo.split('/')[-1]}")
+            except Exception as e:
+                messagebox.showerror("Erro ao Salvar", f"Não foi possível salvar o relatório:\n{e}")
+
+
+#--------------------------------------------------------
+
+def exportar_para_jflap_xml(caminho_arquivo):
+    
+    raiz = ET.Element('structure')
+    ET.SubElement(raiz, 'type').text = "fa"
+    automato = ET.SubElement(raiz, 'automaton')
+    estado_para_id = {estado: i for i, estado in enumerate(estados.values())}
+    for i, estado in enumerate(estados.values()):
+        e_xml = ET.SubElement(automato, 'state', id=str(i), name=estado.nome)
+        ET.SubElement(e_xml, 'x').text = str(float(estado.x))
+        ET.SubElement(e_xml, 'y').text = str(float(estado.y))
+        
+        if estado.inicial:
+            ET.SubElement(e_xml, 'initial')
+        if estado.aceitacao:
+            ET.SubElement(e_xml, 'final')
+
+    for transicao in transicoes:
+        t_xml = ET.SubElement(automato, 'transition')
+        
+        origem_id = estado_para_id.get(transicao.origem)
+        destino_id = estado_para_id.get(transicao.destino)
+        
+        if origem_id is None or destino_id is None: continue 
+        
+        ET.SubElement(t_xml, 'from').text = str(origem_id)
+        ET.SubElement(t_xml, 'to').text = str(destino_id)
+        
+        simbolo = transicao.simbolos_entrada[0] 
+        
+        read_tag = ET.SubElement(t_xml, 'read')
+        if simbolo.lower() != "ε":
+             read_tag.text = simbolo
+
+    xml_string = ET.tostring(raiz, encoding='utf-8')
+    reparsed = minidom.parseString(xml_string) 
+    with open(caminho_arquivo, "w", encoding="utf-8") as f:
+        f.write(reparsed.toprettyxml(indent="  "))
+  
+    status_acao.config(text=f"Exportado para JFLAP XML (JFF) em: {caminho_arquivo.split('/')[-1]}")
+#----------------------------------------------------
 
 def atalho_salvar(event):
     """Função adaptadora para o atalho Ctrl+S. Ignora o evento e chama a função salvar."""
@@ -794,32 +1086,139 @@ def atalho_salvar(event):
     print("Atalho Ctrl+S acionado: arquivo salvo.")
 
 def abrir_automato():
-    global estados, transicoes, contador_estados, caminho_arquivo_atual
-    arquivo = filedialog.askopenfilename(filetypes=[("JSON files", "*.json")])
+    global caminho_arquivo_atual
+    
+    # Aumentei a lista de filtros para ser mais robusta
+    arquivo = filedialog.askopenfilename(
+        filetypes=[
+            ("Todos os Arquivos de Autômato", "*.jff;*.json"),
+            ("JFLAP files", "*.jff"),
+            ("JSON files", "*.json")
+        ]
+    )
+    
     if not arquivo: return
+    
+    caminho_arquivo_atual = arquivo
+    
+    # --- NOVO FLUXO: Decide O QUE chamar com base na extensão ---
+    if caminho_arquivo_atual.lower().endswith('.jff'):
+        # CHAMA O IMPORTADOR XML
+        if importar_de_jflap_xml(caminho_arquivo_atual):
+            status_acao.config(text=f"Autômato JFLAP carregado de {arquivo.split('/')[-1]}")
+    
+    elif caminho_arquivo_atual.lower().endswith('.json'):
+        # CHAMA O IMPORTADOR JSON
+        _carregar_dados_json(caminho_arquivo_atual)
+        status_acao.config(text=f"Autômato JSON carregado de {arquivo.split('/')[-1]}")
+
+    else:
+        messagebox.showwarning("Erro de Formato", "Formato de arquivo não reconhecido. Tente .jff ou .json.")
+    corrigir_desvios_carregados()
+    status_acao.config(text=f"Autômato carregado de {arquivo.split('/')[-1]}")
+
+#-----------------------------------------------
+
+def _carregar_dados_json(arquivo):
+    global estados, transicoes, contador_estados, caminho_arquivo_atual
+    
+    # O conteúdo que estava dentro de 'abrir_automato' para JSON deve vir para cá
     with open(arquivo, "r", encoding="utf-8") as f:
         dados = json.load(f)
-    novo_automato()
-    caminho_arquivo_atual = arquivo
+    
+    # Limpa e carrega como antes
+    novo_automato() 
+    
+    # Recria Estados (como você já faz)
     for e_data in dados["estados"]:
-        estado = Estado(e_data["nome"], e_data["x"], e_data["y"], canvas) # Cria o estado
+        estado = Estado(e_data["nome"], e_data["x"], e_data["y"], canvas)
         estados[e_data["nome"]] = estado
-        # Adiciona a lógica para carregar o símbolo de saída
-        estado.simbolo_saida = e_data.get("simbolo_saida", "") # Define a saída, se houver
-        estado.atualizar_texto() # Atualiza o display no canvas
-
         if e_data.get("inicial"): estado.set_inicial()
         if e_data.get("aceitacao"): estado.set_aceitacao(True)
+    
+    # Atualiza o contador (como você já faz)
     if estados:
         maior_num_estado = max([int(nome.replace('q', '')) for nome in estados.keys() if nome.startswith('q') and nome[1:].isdigit()]) + 1
         contador_estados = maior_num_estado
+        
+    # Recria Transições (como você já faz)
     for t_data in dados["transicoes"]:
         origem, destino = estados.get(t_data["origem"]), estados.get(t_data["destino"])
         if not origem or not destino: continue
-        transicoes.append(Transicao(origem, destino, canvas, t_data.get("simbolos_entrada", ["ε"]), 
-                                t_data.get("simbolo_saida", ""), t_data.get("offset_x", 0), t_data.get("offset_y", 0)))
+        transicoes.append(Transicao(origem, destino, canvas, 
+                                    t_data.get("simbolos_entrada", ["ε"]), 
+                                    t_data.get("simbolo_saida", ""), 
+                                    t_data.get("offset_x", 0), 
+                                    t_data.get("offset_y", 0)))
+        
     corrigir_desvios_carregados()
-    status_acao.config(text=f"Autômato carregado de {arquivo.split('/')[-1]}")
+
+#--------------------------------------------------------------
+
+#--------------------------------------------------------------------------
+def importar_de_jflap_xml(caminho_arquivo):
+    global estados, transicoes, contador_estados
+    
+    try:
+        tree = ET.parse(caminho_arquivo)
+        raiz = tree.getroot()
+        
+        # Limpa o autômato atual
+        novo_automato() 
+
+        # 1. Mapeia ID (do XML) para Nome de Estado (para conexão de transição)
+        mapa_id_nome = {}
+        
+        # 2. Processa os Estados
+        for e_xml in raiz.findall('./automaton/state'):
+            e_id = e_xml.get('id')
+            nome = e_xml.get('name')
+            
+            x = int(float(e_xml.find('x').text)) if e_xml.find('x') is not None else 50
+            y = int(float(e_xml.find('y').text)) if e_xml.find('y') is not None else 50
+            
+            estado = Estado(nome, x, y, canvas) 
+            estados[nome] = estado
+            mapa_id_nome[e_id] = nome 
+            
+            if e_xml.find('initial') is not None:
+                estado.set_inicial()
+            if e_xml.find('final') is not None:
+                estado.set_aceitacao(True)
+                
+        # Atualiza o contador de estados
+        if estados:
+            max_num = max([int(n.replace('q', '')) for n in estados.keys() if n.startswith('q') and n[1:].isdigit()])
+            contador_estados = max_num + 1
+
+        # 3. Processa as Transições
+        for t_xml in raiz.findall('./automaton/transition'):
+            origem_id = t_xml.find('from').text
+            destino_id = t_xml.find('to').text
+            
+            origem_nome = mapa_id_nome.get(origem_id)
+            destino_nome = mapa_id_nome.get(destino_id)
+            
+            origem = estados.get(origem_nome)
+            destino = estados.get(destino_nome)
+            
+            # Símbolo: se a tag <read> tiver texto, é o símbolo. Senão, é epsilon ('ε').
+            read_element = t_xml.find('read')
+            simbolo = read_element.text if read_element is not None and read_element.text else 'ε'
+            
+            if origem and destino:
+                transicoes.append(Transicao(origem, destino, canvas, simbolos_entrada=simbolo))
+
+        # Corrige o desenho de transições reversas que se sobrepõem
+        corrigir_desvios_carregados()
+        
+        return True
+
+    except Exception as e:
+        messagebox.showerror("Erro de Importação JFLAP", f"Erro ao carregar o arquivo JFLAP: {e}")
+        return False
+    
+#----------------------------------------------------------
 
 def corrigir_desvios_carregados():
     pares_verificados = set()
@@ -843,7 +1242,7 @@ def corrigir_desvios_carregados():
 
 # --- UI Setup ---
 janela = tk.Tk()
-janela.title("Mini-JFLAP em Python v10")
+janela.title("Mini-JFLAP em Python v11")
 janela.geometry("900x700")
 
 
@@ -867,6 +1266,7 @@ menu_tipo.add_command(label="Máquina de Mealy", command=lambda: definir_tipo_au
 menu_tipo.add_command(label="Máquina de Moore", command=lambda: definir_tipo_automato("Moore")) # <-- NOVA OPÇÃO
 menu_tipo.add_separator() # Separador visual
 menu_tipo.add_command(label="Autômato com Pilha [EM BREVE]", state="disabled")
+menu_tipo.add_command(label="Máquina de Turing [EM BREVE]", state="disabled")
 menu_bar.add_cascade(label="Tipo de Autômato", menu=menu_tipo)
 janela.config(menu=menu_bar)
 
@@ -877,9 +1277,12 @@ toolbar = tk.Frame(janela, bd=1, relief=tk.RAISED)
 toolbar.pack(side=tk.TOP, fill=tk.X, padx=2, pady=2)
 icones = {}
 try:
-    nomes_icones = ["estado", "transicao", "apagar", "salvar"]
+    # A linha de import original já nos dá o "Image"
+    nomes_icones = ["selecionar", "estado", "transicao", "apagar", "salvar"]
     for nome in nomes_icones:
-        icones[nome] = ImageTk.PhotoImage(Image.open(f"icones/{nome}.png").resize((24, 24)))
+        # A correção está aqui, usando Image.Resampling.LANCZOS
+        img = Image.open(f"icones/{nome}.png").resize((24, 24), Image.Resampling.LANCZOS)
+        icones[nome] = ImageTk.PhotoImage(img)
     usar_icones = True
 except Exception as e:
     print(f"Aviso: Ícones não carregados. Usando texto. (Erro: {e})")
@@ -896,6 +1299,7 @@ def criar_botao_toolbar(parent, nome_icone, texto, comando):
 
 btn_estado = criar_botao_toolbar(toolbar, "estado", "Estado", ativar_modo_arrastar)
 btn_transicao = criar_botao_toolbar(toolbar, "transicao", "Transição", ativar_modo_transicao)
+btn_selecionar = criar_botao_toolbar(toolbar, "selecionar", "Selecionar", ativar_modo_selecao) # <-- NOVO BOTÃO
 btn_apagar = criar_botao_toolbar(toolbar, "apagar", "Apagar", ativar_modo_apagar)
 tk.Frame(toolbar, height=30, width=2, bg="grey").pack(side=tk.LEFT, padx=5, pady=2)
 btn_salvar = criar_botao_toolbar(toolbar, "salvar", "Salvar", salvar)
@@ -934,7 +1338,7 @@ botao_simular = tk.Button(painel_simulacao, text="Simular", command=simular_pala
 botao_simular.pack(side=tk.LEFT, padx=5)
 resultado = tk.Label(painel_simulacao, text="", font=("Arial", 12, "bold"))
 resultado.pack(side=tk.LEFT, padx=10)
-sequencia_saida = tk.Label(painel_simulacao, text="Saída: ", font=("Arial", 12))
+sequencia_saida = tk.Label(painel_simulacao, text="Saída: ", font=("Arial", 12))  
 sequencia_saida.pack(side=tk.LEFT, padx=10)
 
 ativar_modo_arrastar()
