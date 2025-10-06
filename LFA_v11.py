@@ -5,8 +5,8 @@ from tkinter import messagebox, simpledialog, filedialog, colorchooser
 from PIL import Image, ImageTk
 import json
 import math
-import xml.etree.ElementTree as ET # <-- NOVA IMPORTAÇÃO
-from xml.dom import minidom        # <-- NOVA IMPORTAÇÃO
+import xml.etree.ElementTree as ET 
+from xml.dom import minidom
 import csv # <-- NOVA LINHA v11
 
 # --- Classes ---
