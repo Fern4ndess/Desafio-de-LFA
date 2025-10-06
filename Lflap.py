@@ -43,20 +43,39 @@ class Estado:
             arrow=tk.LAST, width=2, fill="green", tags=("seta_inicial", self.nome)
         )
 
-    def toggle_aceitacao(self):
-        self.aceitacao = not self.aceitacao
+    # Dentro da classe Estado
+
+    def set_aceitacao(self, eh_aceitacao):
+        """
+        Define diretamente o estado de aceitação, desenhando ou apagando
+        o círculo extra conforme necessário.
+        """
+        # Se o novo estado for igual ao atual, não faz nada
+        if self.aceitacao == eh_aceitacao:
+            return
+
+        self.aceitacao = eh_aceitacao
+        
+        # Apaga qualquer círculo de aceitação antigo associado a este estado
+        # para evitar duplicatas.
+        for item in self.canvas.find_withtag("aceitacao"):
+            if self.nome in self.canvas.gettags(item):
+                self.canvas.delete(item)
+
+        # Se for um estado de aceitação, desenha o novo círculo
         if self.aceitacao:
-            # círculo extra
             self.canvas.create_oval(
                 self.x - self.raio + 5, self.y - self.raio + 5,
                 self.x + self.raio - 5, self.y + self.raio - 5,
                 outline="black", width=2, tags=("aceitacao", self.nome)
             )
-        else:
-            # remove o círculo duplo
-            for item in self.canvas.find_withtag("aceitacao"):
-                if self.nome in self.canvas.gettags(item):
-                    self.canvas.delete(item)
+
+    def toggle_aceitacao(self):
+        """
+        Inverte o estado de aceitação atual. Usado pelo clique do botão direito.
+        """
+        # Agora, a função toggle simplesmente chama a função set.
+        self.set_aceitacao(not self.aceitacao)
 
     # --- MÉTODO NOVO A SER ADICIONADO ---
     def destruir(self):
@@ -71,14 +90,15 @@ class Estado:
 
 
 class Transicao:
-    def __init__(self, origem, destino, canvas, simbolo="ε"):
+    def __init__(self, origem, destino, canvas, simbolo_entrada="ε", simbolo_saida="", offset_x=0, offset_y=0):
         self.origem = origem
         self.destino = destino
         self.canvas = canvas
-        self.simbolo = simbolo
+        self.simbolo_entrada = simbolo_entrada # Renomeado de 'simbolo' para 'simbolo_entrada'
+        self.simbolo_saida = simbolo_saida     # NOVO: Símbolo de saída
         self.tag_unica = f"trans_{id(self)}"
-        self.offset_x = 0
-        self.offset_y = 0
+        self.offset_x = offset_x #v7
+        self.offset_y = offset_y #v7
         self.is_loop = (self.origem == self.destino)
         self.atualizar_posicao()
 
@@ -88,8 +108,10 @@ class Transicao:
             self._desenhar_loop()
         else:
             self._desenhar_linha_reta()
+        # No final de atualizar_posicao, dentro da classe Transicao
         self.canvas.tag_raise("estado")
         self.canvas.tag_raise("texto")
+        self.canvas.tag_raise("aceitacao") # <-- A LINHA DA SOLUÇÃO
 
     def _desenhar_linha_reta(self):
         # ... (este método pode continuar como está no seu código, ele já funciona bem)
@@ -104,7 +126,8 @@ class Transicao:
         coords_linha = (p_ini_x + self.offset_x, p_ini_y + self.offset_y, p_fim_x + self.offset_x, p_fim_y + self.offset_y)
         coords_texto = (((x_o + x_d) / 2) + self.offset_x, ((y_o + y_d) / 2 - 15) + self.offset_y)
         self.canvas.create_line(coords_linha, arrow=tk.LAST, fill="black", width=2, tags=(self.tag_unica, "transicao"))
-        self.canvas.create_text(coords_texto, text=self.simbolo, font=("Arial", 10, "italic"), tags=(self.tag_unica, "rotulo"))
+        rotulo_completo = f"{self.simbolo_entrada}/{self.simbolo_saida}" # NOVO: simbolo de saida
+        self.canvas.create_text(coords_texto, text=rotulo_completo, font=("Arial", 10, "italic"), tags=(self.tag_unica, "rotulo"))
 
     def _desenhar_loop(self):
         x, y = self.origem.x, self.origem.y
@@ -122,10 +145,12 @@ class Transicao:
         ponta1, ponta2, ponta3 = (ponta_x, ponta_y), (ponta_x - 10, ponta_y - 2), (ponta_x - 2, ponta_y + 8)
         self.canvas.create_polygon(ponta1, ponta2, ponta3, fill="black", tags=(self.tag_unica, "transicao"))
         coords_texto = (x, y - raio_estado - raio_loop - 8)
-        self.canvas.create_text(coords_texto, text=self.simbolo, font=("Arial", 10, "italic"), tags=(self.tag_unica, "rotulo"))
+        rotulo_completo = f"{self.simbolo_entrada}/{self.simbolo_saida}" # NOVO: simnbolo de saida
+        self.canvas.create_text(coords_texto, text=rotulo_completo, font=("Arial", 10, "italic"), tags=(self.tag_unica, "rotulo"))
         
-    def atualizar_simbolo(self, novo_simbolo):
-        self.simbolo = novo_simbolo
+    def atualizar_simbolo(self, novo_simbolo_entrada, novo_simbolo_saida):
+        self.simbolo_entrada = novo_simbolo_entrada
+        self.simbolo_saida = novo_simbolo_saida # NOVO: simbolo de saida
         self.atualizar_posicao()
 
     def destruir(self):
@@ -139,6 +164,7 @@ transicoes = []
 objeto_arrastado = {"id": None, "x_inicial": 0, "y_inicial": 0}
 modo_atual = "arrastar"
 transicao_info = {"origem": None}
+caminho_arquivo_atual = None # NOVO: Guarda o caminho do arquivo aberto
 
 
 # --- Funções ---
@@ -236,7 +262,7 @@ def gerenciar_clique_transicao(event):
                 break
 
         # Cria a transição com o símbolo padrão "ε"
-        nova_transicao = Transicao(estado_origem, estado_destino, canvas)
+        nova_transicao = Transicao(estado_origem, estado_destino, canvas, simbolo_entrada="ε", simbolo_saida="")
         transicoes.append(nova_transicao)
 
         # Lógica para desvio de setas gêmeas
@@ -263,14 +289,11 @@ def gerenciar_clique_transicao(event):
 
 def editar_rotulo_transicao(id_item_clicado):
     """
-    Encontra a transição clicada pelo ID de um de seus componentes
-    e abre uma caixa de diálogo para editar seu símbolo.
+    Encontra a transição clicada e abre uma caixa de diálogo para editar 
+    o Símbolo de ENTRADA e o Símbolo de SAÍDA (Mealy).
     """
-    # Pega todas as tags do item que foi clicado
     tags_do_item = canvas.gettags(id_item_clicado)
-    
     tag_alvo = None
-    # Procura pela tag única da transição (ex: "trans_12345")
     for tag in tags_do_item:
         if tag.startswith("trans_"):
             tag_alvo = tag
@@ -278,20 +301,41 @@ def editar_rotulo_transicao(id_item_clicado):
             
     if tag_alvo:
         transicao_alvo = None
-        # Procura na nossa memória qual objeto Transicao tem essa tag
         for t in transicoes:
             if t.tag_unica == tag_alvo:
                 transicao_alvo = t
                 break
         
         if transicao_alvo:
-            novo_simbolo = simpledialog.askstring(
-                "Editar Símbolo",
-                "Digite o novo símbolo para a transição:",
-                initialvalue=transicao_alvo.simbolo
+            # Apresenta o formato ENTRADA/SAÍDA
+            valor_inicial = f"{transicao_alvo.simbolo_entrada}/{transicao_alvo.simbolo_saida}"
+            
+            novo_rotulo_completo = simpledialog.askstring(
+                "Editar Transição (Mealy)",
+                "Formato: Símbolo de ENTRADA / Símbolo de SAÍDA (Ex: a/1)",
+                initialvalue=valor_inicial
             )
-            if novo_simbolo is not None: # Permite símbolos vazios, mas não cancelamento
-                transicao_alvo.atualizar_simbolo(novo_simbolo)
+            
+            if novo_rotulo_completo is not None:
+                # 1. Separa a entrada e saída pela barra (/)
+                partes = novo_rotulo_completo.split('/', 1)
+                
+                # Garante que temos pelo menos a entrada
+                simbolo_entrada_novo = partes[0].strip()
+                simbolo_saida_novo = partes[1].strip() if len(partes) > 1 else ""
+                
+                # 2. Lógica para transição vazia (ε)
+                # Se o usuário apagar TUDO da entrada, assume ε
+                if not simbolo_entrada_novo:
+                    simbolo_entrada_final = "ε"
+                else:
+                    simbolo_entrada_final = simbolo_entrada_novo
+                    
+                # 3. Se a saída for apagada, ela fica vazia ("")
+                simbolo_saida_final = simbolo_saida_novo
+                
+                # 4. Atualiza a transição
+                transicao_alvo.atualizar_simbolo(simbolo_entrada_final, simbolo_saida_final)
 
 
 def gerenciar_clique_apagar(event):
@@ -508,37 +552,77 @@ def animar_token(token_id, origem, destino, callback_ao_finalizar, passo_atual=0
         if callback_ao_finalizar:
             callback_ao_finalizar() # Executa a função que foi passada como 'próximo passo'
 
+
+# --- NOVAS FUNÇÕES DE SIMULAÇÃO AFNE ---
+
+def calcular_fecho_epsilon(estados_origem):
+    """
+    Calcula o Fecho-Epsilon (E-closure) de um conjunto de estados.
+    Encontra todos os estados alcançáveis seguindo apenas transições com símbolo 'ε'.
+
+    Args:
+        estados_origem (set): Um conjunto de objetos Estado (não nomes).
+    
+    Returns:
+        set: Um conjunto de objetos Estado que formam o E-closure.
+    """
+    fecho = set(estados_origem)
+    pilha = list(estados_origem)
+
+    while pilha:
+        estado_atual = pilha.pop()
+        
+        # Procura transições ε a partir do estado atual
+        for t in transicoes:
+            if t.origem == estado_atual and t.simbolo_entrada == "ε":
+                estado_destino = t.destino
+                
+                # Se o estado de destino ainda não está no fecho, adiciona-o
+                if estado_destino not in fecho:
+                    fecho.add(estado_destino)
+                    pilha.append(estado_destino)
+                    
+    return fecho
+
 def simular_palavra():
     """
-    Função inicial chamada pelo botão. Prepara o ambiente e
-    dá início ao primeiro passo da simulação animada.
+    Função inicial para simulação AFNe.
+    Define o estado inicial e seu fecho-epsilon, e inicia o processo.
     """
     palavra = input_entry.get()
-    resultado.config(text="") # Limpa o resultado anterior
+    resultado.config(text="") 
 
-    # Encontra o estado inicial
-    estado_atual = None
+    estado_inicial = None
     for est in estados.values():
         if est.inicial:
-            estado_atual = est
+            estado_inicial = est
             break
     
-    if not estado_atual:
+    if not estado_inicial:
         resultado.config(text="Erro: Nenhum estado inicial definido!", fg="orange")
         return
     
-    # Inicia a simulação passo a passo
-    simular_passo_a_passo(palavra, estado_atual)
+    # O conjunto de estados iniciais é o fecho-epsilon do estado inicial
+    estados_atuais = calcular_fecho_epsilon({estado_inicial})
+    
+    # Inicia a simulação
+    simular_passo_a_passo(palavra, estados_atuais)
 
-
-def simular_passo_a_passo(palavra_restante, estado_atual):
+def simular_passo_a_passo(palavra_restante, estados_atuais):
     """
-    Executa um passo da simulação. Anima a transição e agenda
-    a si mesma para o próximo passo.
+    Executa um passo da simulação AFNe: lê um símbolo e calcula o próximo conjunto de estados.
     """
-    # CASO 1: A palavra terminou. Verificamos se o estado é de aceitação.
+    
+    # Remove quaisquer realces anteriores antes de começar o novo passo
+    for estado in estados.values():
+        canvas.itemconfig(estado.id_circulo, outline="black", width=2)
+    
+    # ------------------- FIM DA PALAVRA -------------------
     if not palavra_restante:
-        if estado_atual.aceitacao:
+        # Palavra aceita se QUALQUER um dos estados atuais for de aceitação
+        aceita = any(estado.aceitacao for estado in estados_atuais)
+        
+        if aceita:
             resultado.config(text="Palavra aceita ✅", fg="green")
         else:
             resultado.config(text="Palavra rejeitada ❌", fg="red")
@@ -547,70 +631,104 @@ def simular_passo_a_passo(palavra_restante, estado_atual):
     simbolo_atual = palavra_restante[0]
     proxima_palavra = palavra_restante[1:]
     
-    # Procura a próxima transição
-    transicao_encontrada = None
-    for t in transicoes:
-        if t.origem == estado_atual and t.simbolo == simbolo_atual:
-            transicao_encontrada = t
-            break
-    
-    # CASO 2: Não há transição para o símbolo. Palavra rejeitada.
-    if not transicao_encontrada:
-        resultado.config(text="Palavra rejeitada ❌ (transição não encontrada)", fg="red")
+    # ------------------- CALCULAR PRÓXIMOS ESTADOS -------------------
+    proximos_estados_brutos = set()
+
+    for estado_origem in estados_atuais:
+        # 1. Realça os estados de onde a transição vai partir
+        canvas.itemconfig(estado_origem.id_circulo, outline="red", width=3)
+        
+        for t in transicoes:
+            # 2. Procura transições que saem dos estados atuais E consomem o símbolo
+            if t.origem == estado_origem and t.simbolo_entrada == simbolo_atual:
+                proximos_estados_brutos.add(t.destino)
+
+    # ------------------- VERIFICAÇÃO E RECURSÃO -------------------
+    if not proximos_estados_brutos:
+        # Se não há transições possíveis para o símbolo, a palavra é rejeitada
+        resultado.config(text=f"Palavra rejeitada ❌ (preso no símbolo '{simbolo_atual}')", fg="red")
+        
+        # O estado final (rejeitado) deve manter o realce por um momento
+        def limpar_realce():
+            for estado in estados.values():
+                canvas.itemconfig(estado.id_circulo, outline="black", width=2)
+        janela.after(1000, limpar_realce) # Mantém realce por 1 segundo
+        
         return
+    
+    # 3. Calcula o fecho-epsilon do conjunto de destino para obter os estados finais do passo
+    proximos_estados_finais = calcular_fecho_epsilon(proximos_estados_brutos)
+    
+    # 4. Mostra o símbolo atual sendo lido
+    nomes_atuais = ", ".join([e.nome for e in estados_atuais])
+    instrucoes.config(text=f"Lendo símbolo: '{simbolo_atual}'. Estados Atuais: [{nomes_atuais}]")
+    
+    # 5. Agenda o próximo passo (com um pequeno atraso para visualização)
+    def ir_para_proximo_passo():
+        # Chama a si mesma com o resto da palavra e os novos estados
+        simular_passo_a_passo(proxima_palavra, proximos_estados_finais)
 
-    # CASO 3: Encontramos uma transição. Iniciamos a animação.
-    estado_destino = transicao_encontrada.destino
-    
-    # Cria o "token" na posição do estado atual
-    raio_token = 5
-    token = canvas.create_oval(
-        estado_atual.x - raio_token, estado_atual.y - raio_token,
-        estado_atual.x + raio_token, estado_atual.y + raio_token,
-        fill="red", outline="black"
-    )
-    
-    # Define o que deve acontecer QUANDO a animação terminar:
-    # Chamar esta mesma função para o resto da palavra e o novo estado.
-    proximo_passo = lambda: simular_passo_a_passo(proxima_palavra, estado_destino)
-    
-    # Inicia a animação, passando a função "proximo_passo" como callback
-    animar_token(token, estado_atual, estado_destino, proximo_passo)
-
-#----------------------------------- adicionando v4 ------------------------------------
+    # 500ms de atraso para o usuário ver de onde está partindo a transição e qual símbolo está a ser lido
+    janela.after(500, ir_para_proximo_passo)
 
 def novo_automato():
-    global estados, transicoes, contador_estados
+    global estados, transicoes, contador_estados, caminho_arquivo_atual # Adicione aqui
     canvas.delete("all")
     estados = {}
     transicoes = []
     contador_estados = 0
+    caminho_arquivo_atual = None # Limpa a memória
     resultado.config(text="")
     instrucoes.config(text="Novo autômato criado.")
 
-def salvar_automato():
+
+def salvar():
+    """Função de salvamento rápido. Salva no caminho atual ou chama 'Salvar como...' se for novo."""
+    if caminho_arquivo_atual:
+        _salvar_dados_no_arquivo(caminho_arquivo_atual)
+    else:
+        # Se não há caminho, comporta-se como "Salvar como..."
+        salvar_automato()
+
+
+def salvar_automato(): # Esta agora é a nossa função "Salvar como..."
+    global caminho_arquivo_atual
+    arquivo = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
+    if arquivo:
+        caminho_arquivo_atual = arquivo
+        _salvar_dados_no_arquivo(caminho_arquivo_atual)
+
+
+def _salvar_dados_no_arquivo(caminho):
+    """Função auxiliar que pega os dados do autômato e os salva no caminho especificado."""
     dados = {
         "estados": [
             {"nome": est.nome, "x": est.x, "y": est.y, "inicial": est.inicial, "aceitacao": est.aceitacao}
             for est in estados.values()
         ],
         "transicoes": [
-            {"origem": t.origem.nome, "destino": t.destino.nome, "simbolo": t.simbolo}
+            {"origem": t.origem.nome, "destino": t.destino.nome,
+             "simbolo_entrada": t.simbolo_entrada, "simbolo_saida": t.simbolo_saida,
+             "offset_x": t.offset_x, "offset_y": t.offset_y}
             for t in transicoes
         ]
     }
-    arquivo = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON files", "*.json")])
-    if arquivo:
+    try:
         import json
-        with open(arquivo, "w", encoding="utf-8") as f:
+        with open(caminho, "w", encoding="utf-8") as f:
             json.dump(dados, f, indent=4)
-        instrucoes.config(text=f"Autômato salvo em {arquivo}")
+        instrucoes.config(text=f"Autômato salvo em {caminho.split('/')[-1]}")
+    except Exception as e:
+        messagebox.showerror("Erro ao Salvar", f"Não foi possível salvar o arquivo:\n{e}")
+
 
 def abrir_automato():
     global estados, transicoes, contador_estados
     arquivo = filedialog.askopenfilename(filetypes=[("JSON files", "*.json")])
     if not arquivo:
         return
+    
+    caminho_arquivo_atual = arquivo # Guarda o caminho do arquivo abert
     import json
     with open(arquivo, "r", encoding="utf-8") as f:
         dados = json.load(f)
@@ -628,20 +746,28 @@ def abrir_automato():
         if e["inicial"]:
             estado.set_inicial()
         if e["aceitacao"]:
-            estado.toggle_aceitacao()
+            estado.set_aceitacao(True)
         contador_estados += 1
 
+    # Recriar transições
     # Recriar transições
     for t in dados["transicoes"]:
         origem = estados[t["origem"]]
         destino = estados[t["destino"]]
-        transicoes.append(Transicao(origem, destino, canvas, t["simbolo"]))
+        simbolo_entrada = t.get("simbolo_entrada", t.get("simbolo", "ε"))
+        simbolo_saida = t.get("simbolo_saida", "")
+        # --- LINHAS NOVAS ---
+        # Lê os valores de offset do arquivo, com 0 como padrão se não existirem
+        offset_x = t.get("offset_x", 0)
+        offset_y = t.get("offset_y", 0)
+        
+        # Passa os valores de offset para a nova transição
+        transicoes.append(Transicao(origem, destino, canvas, simbolo_entrada, simbolo_saida, offset_x, offset_y))
 
     instrucoes.config(text=f"Autômato carregado de {arquivo}")
 
 
-
-#----------------------------------fim v4-----------------------------------------------
+#----------------------------------fim v4--------------------------------------------
 
 
 # --- Janela ---
@@ -649,13 +775,14 @@ janela = tk.Tk()
 janela.title("Mini-JFLAP em Python")
 janela.geometry("800x700")
 
-#------------------------------- adicionando MENU em v4 ------------------------------------
+#------------------------------- MENU ------------------------------------
 menu_bar = tk.Menu(janela)
 
 # Menu Arquivo
 menu_arquivo = tk.Menu(menu_bar, tearoff=0)
 menu_arquivo.add_command(label="Novo", command=novo_automato)
 menu_arquivo.add_command(label="Abrir", command=abrir_automato)
+menu_arquivo.add_command(label="Salvar", command=salvar) # <-- NOVA LINHA v7
 menu_arquivo.add_command(label="Salvar como...", command=salvar_automato)
 menu_arquivo.add_separator()
 menu_arquivo.add_command(label="Sair", command=janela.quit)
@@ -665,9 +792,9 @@ menu_bar.add_cascade(label="Arquivo", menu=menu_arquivo)
 # Ativar menu
 janela.config(menu=menu_bar)
 
-#------------------------------------- fim MENU v4 --------------------------------------------
+#------------------------------------- MENU --------------------------------------------
 
-#------------------------------- adicionando BOTOES em v4 -------------------------------------
+#----------------------------------- BOTOES --------------------------------------------
 
 # Criar uma barra de ferramentas
 toolbar = tk.Frame(janela, bd=1, relief=tk.RAISED)
@@ -710,7 +837,26 @@ else:
     btn_apagar = tk.Button(toolbar, text="Apagar", relief=tk.FLAT, command=ativar_modo_apagar)
 btn_apagar.pack(side=tk.LEFT, padx=2, pady=2)
 
+# Tenta carregar o ícone de Salvar v7
+try:
+    # Use "salvar.png" ou "salvar_caneta.png", o que você preferir
+    icone_salvar = Image.open("salvar.png").resize((35, 35))
+    icone_salvar = ImageTk.PhotoImage(icone_salvar)
+except Exception as e:
+    print("Aviso: não foi possível carregar o ícone (salvar.png).", e)
+    icone_salvar = None # Define como None se falhar
 
+# Botão para Salvar
+# Adicione um separador visual na barra de ferramentas
+separator = tk.Frame(toolbar, height=35, width=2, bg="grey")
+separator.pack(side=tk.LEFT, padx=5, pady=2)
+
+if icone_salvar:
+    btn_salvar = tk.Button(toolbar, image=icone_salvar, relief=tk.FLAT, command=salvar)
+    btn_salvar.image = icone_salvar
+else:
+    btn_salvar = tk.Button(toolbar, text="Salvar", relief=tk.FLAT, command=salvar)
+btn_salvar.pack(side=tk.LEFT, padx=2, pady=2)
 
 
 
@@ -743,4 +889,8 @@ botao_simular.pack(pady=5)
 resultado = tk.Label(janela, text="", font=("Arial", 12, "bold"))
 resultado.pack(pady=5)
 
-janela.mainloop()
+# NOVO: Label para a Sequência de Saída 
+sequencia_saida = tk.Label(janela, text="Saída: ", font=("Arial", 12))
+sequencia_saida.pack(pady=5)
+
+janela.mainloop() 
