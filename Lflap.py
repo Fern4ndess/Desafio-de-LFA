@@ -14,6 +14,7 @@ class Estado:
         self.canvas = canvas
         self.inicial = False
         self.aceitacao = False
+        self.simbolo_saida = "" # <-- NOVA LINHA
         self.id_circulo = canvas.create_oval(
             x - self.raio, y - self.raio, x + self.raio, y + self.raio,
             fill="lightblue", outline="black", width=2, tags=("estado", nome)
@@ -52,6 +53,15 @@ class Estado:
 
     def destruir(self):
         self.canvas.delete(self.nome)
+
+    # Dentro da class Estado
+    def atualizar_texto(self):
+        """Atualiza o texto do estado no canvas para incluir a saída (se aplicável)."""
+        texto_display = self.nome
+        # Em modo Moore, se houver símbolo de saída, exibe "nome/saida"
+        if tipo_automato_atual == "Moore" and self.simbolo_saida:
+            texto_display = f"{self.nome}/{self.simbolo_saida}"
+        self.canvas.itemconfig(self.id_texto, text=texto_display)
 
 class Transicao:
     def __init__(self, origem, destino, canvas, simbolos_entrada="ε", simbolo_saida="", offset_x=0, offset_y=0):
@@ -110,7 +120,7 @@ class Transicao:
         ponta_y = centro_arco_y - raio_loop * math.sin(angulo_final_rad)
         ponta1, ponta2, ponta3 = (ponta_x, ponta_y), (ponta_x - 10, ponta_y - 2), (ponta_x - 2, ponta_y + 8)
         self.canvas.create_polygon(ponta1, ponta2, ponta3, fill="black", tags=(self.tag_unica, "transicao"))
-        coords_texto = (x, y - raio_estado - raio_loop - 8)
+        coords_texto = (x, y - raio_estado - raio_loop - 20)
         self.canvas.create_text(coords_texto, text=self._get_rotulo_texto(), font=("Arial", 10, "italic"), tags=(self.tag_unica, "rotulo"))
 
     def atualizar_simbolo(self, novo_rotulo_completo):
@@ -196,7 +206,7 @@ def gerenciar_clique_transicao(event):
             if dist == 0: dist = 1
             vetor_x, vetor_y = (estado_destino.x - estado_origem.x) / dist, (estado_destino.y - estado_origem.y) / dist
             vetor_perp_x, vetor_perp_y = -vetor_y, vetor_x
-            offset_dist = 10
+            offset_dist = 15 # Distância do desvio
             nova_transicao.offset_x, nova_transicao.offset_y = vetor_perp_x * offset_dist, vetor_perp_y * offset_dist
             nova_transicao.atualizar_posicao()
             transicao_gemea.offset_x, transicao_gemea.offset_y = -vetor_perp_x * offset_dist, -vetor_perp_y * offset_dist
@@ -206,31 +216,66 @@ def gerenciar_clique_transicao(event):
         status_acao.config(text="Transição criada! Clique nela para editar o símbolo.")
 
 def editar_rotulo_transicao(id_item_clicado):
+    """
+    Abre uma caixa de diálogo CONTEXTUAL para editar o símbolo da transição,
+    aplicando as regras do tipo de autômato atual.
+    """
     tags_do_item = canvas.gettags(id_item_clicado)
-    tag_alvo = next((tag for tag in tags_do_item if tag.startswith("trans_")), None)
+    tag_alvo = next((tag for tag in tags_do_item if tag.startswith("trans_")), None) # Identifica a transição
     if not tag_alvo: return
-    transicao_alvo = next((t for t in transicoes if t.tag_unica == tag_alvo), None)
+    transicao_alvo = next((t for t in transicoes if t.tag_unica == tag_alvo), None) # Encontra o objeto Transicao
     if not transicao_alvo: return
-    
-    if tipo_automato_atual in ["AFD", "AFNe"]:
+
+    # --- LÓGICA CONTEXTUAL COMPLETA ---
+    # Se o tipo for AFD, AFN ou AFNe, usamos a mesma caixa de diálogo
+    if tipo_automato_atual in ["AFD", "AFN", "AFNe", "Moore"]:
         valor_inicial = ",".join(transicao_alvo.simbolos_entrada)
-        novo_rotulo = simpledialog.askstring(f"Editar Símbolos ({tipo_automato_atual})", "Símbolos de entrada (separados por vírgula):", initialvalue=valor_inicial)
+        novo_rotulo = simpledialog.askstring(
+            f"Editar Símbolos ({tipo_automato_atual})",
+            "Digite o(s) símbolo(s) de entrada, separados por vírgula:",
+            initialvalue=valor_inicial
+        )
+        
         if novo_rotulo is not None:
+            # Pega a nova lista de símbolos que o usuário digitou
             simbolos_novos = [s.strip() for s in novo_rotulo.split(',') if s.strip()]
             if not simbolos_novos: simbolos_novos = ["ε"]
+
+            # === INÍCIO DO CHECKLIST DE REGRAS ===
+
+            # REGRA 1: Proibir transições épsilon para AFD e AFN
+            if tipo_automato_atual in ["AFD", "AFN"] and "ε" in simbolos_novos:
+                messagebox.showerror(f"Regra de {tipo_automato_atual} Violada", f"Um {tipo_automato_atual} não pode conter transições épsilon (ε).")
+                return # Aborta a edição
+
+            # REGRA 2: Proibir não-determinismo APENAS para AFD
             if tipo_automato_atual == "AFD":
-                if "ε" in simbolos_novos:
-                    messagebox.showerror("Regra de AFD Violada", "Um AFD não pode conter transições épsilon (ε).")
-                    return
                 for simbolo in simbolos_novos:
                     for outra_t in transicoes:
-                        if outra_t != transicao_alvo and outra_t.origem == transicao_alvo.origem and simbolo in outra_t.simbolos_entrada:
-                            messagebox.showerror("Regra de AFD Violada", f"Não-determinismo detectado!\nO estado '{transicao_alvo.origem.nome}' já tem uma transição para o símbolo '{simbolo}'.")
-                            return
+                        # Pula a verificação da própria transição que estamos editando
+                        if outra_t == transicao_alvo:
+                            continue
+                        # Se encontrar outra transição que sai da mesma origem e usa o mesmo símbolo, é um erro.
+                        if outra_t.origem == transicao_alvo.origem and simbolo in outra_t.simbolos_entrada:
+                            messagebox.showerror("Regra de AFD Violada", 
+                                f"Não-determinismo detectado!\nO estado '{transicao_alvo.origem.nome}' já tem uma transição para o símbolo '{simbolo}'.")
+                            return # Aborta a edição
+
+            # === FIM DO CHECKLIST DE REGRAS ===
+            
+            # Se passou por todas as regras, a atualização é permitida
             transicao_alvo.atualizar_simbolo(novo_rotulo)
-    # Adicionar lógica para outros tipos de autômatos (Mealy, etc.) aqui
-    else:
-        messagebox.showinfo("Aviso", f"A edição para o tipo '{tipo_automato_atual}' ainda não foi implementada.")
+
+    # Se o tipo for Mealy, usamos a outra caixa de diálogo
+    elif tipo_automato_atual == "Mealy":
+        valor_inicial = transicao_alvo._get_rotulo_texto()
+        novo_rotulo_completo = simpledialog.askstring(
+            "Editar Transição (Mealy)",
+            "Formato: entrada / saida (ex: a/1)",
+            initialvalue=valor_inicial
+        )
+        if novo_rotulo_completo is not None:
+            transicao_alvo.atualizar_simbolo(novo_rotulo_completo)
 
 def gerenciar_clique_apagar(event):
     """Gerencia cliques no modo apagar, delegando a tarefa para a função apropriada."""
@@ -275,6 +320,11 @@ def criar_novo_estado(x, y):
     contador_estados += 1
 
 def toggle_aceitacao_event(event):
+    # Se estamos no meio da criação de uma transição, ignora o clique duplo
+    # Impede a ação se estivermos no modo Mealy
+    if tipo_automato_atual == "Mealy":
+        return
+    
     estado_clicado = encontrar_estado_clicado(event)
     if estado_clicado:
         estado_clicado.toggle_aceitacao()
@@ -285,30 +335,37 @@ def atualizar_transicoes_conectadas(estado_movido):
             transicao.atualizar_posicao()
 
 def mostrar_menu_contexto(event):
-    """Exibe o menu de contexto para o estado clicado."""
+    """Exibe o menu de contexto apropriado para o modo e o item clicado."""
     estado_clicado = encontrar_estado_clicado(event)
     
     if estado_clicado:
         menu_contexto = tk.Menu(janela, tearoff=0)
         
-        menu_contexto.add_command( # Adiciona a opção de marcar/desmarcar como aceitacao
-            label="Marcar/Desmarcar como Aceitação",
-            command=estado_clicado.toggle_aceitacao
-        )
-        menu_contexto.add_command( # Adiciona a opção de renomear
+        # --- LÓGICA CONTEXTUAL ---
+        # Só adiciona a opção de "Aceitação" se NÃO estivermos no modo Mealy
+        if tipo_automato_atual not in ["Mealy","Moore"]:
+            menu_contexto.add_command(
+                label="Marcar/Desmarcar como Aceitação", command=estado_clicado.toggle_aceitacao
+            )
+
+        # --- NOVIDADE AQUI ---
+        # Opção de Saída do Estado (apenas para Moore)
+        if tipo_automato_atual == "Moore":
+            menu_contexto.add_command(label="Definir Saída do Estado...", command=lambda: definir_saida_estado(estado_clicado))
+        
+        # As outras opções aparecem em todos os modos
+        menu_contexto.add_command(
             label="Renomear Estado...",
             command=lambda: renomear_estado(estado_clicado)
         )
-        menu_contexto.add_command( # Adiciona a opção de mudar cor
+        menu_contexto.add_command(
             label="Alterar Cor...",
             command=lambda: mudar_cor_estado(estado_clicado)
         )
-        
-        # --- NOVIDADE AQUI ---
-        menu_contexto.add_separator() # Adiciona uma linha de separação
+        menu_contexto.add_separator()
         menu_contexto.add_command(
             label="Apagar Estado",
-            command=lambda: apagar_estado(estado_clicado) # Chama nossa nova função
+            command=lambda: apagar_estado(estado_clicado)
         )
         
         menu_contexto.post(event.x_root, event.y_root)
@@ -399,6 +456,30 @@ def gerenciar_atalhos_teclado(event):
     elif event.keysym == "F3":
         ativar_modo_apagar()
 
+def gerenciar_clique_duplo(event):
+    """
+    Gerencia o evento de clique duplo. Cria um laço se estiver no modo de transição,
+    ou alterna o estado de aceitação nos outros modos.
+    """
+    # Se estamos no modo de transição, a prioridade é criar um laço
+    if modo_atual == "transicao":
+        estado_clicado = encontrar_estado_clicado(event)
+        if estado_clicado:
+            # Cria uma nova transição onde a origem e o destino são o mesmo estado
+            nova_transicao = Transicao(estado_clicado, estado_clicado, canvas)
+            transicoes.append(nova_transicao)
+            
+            # Limpa a seleção de origem, caso o usuário tenha clicado em outro estado antes
+            if transicao_info["origem"]:
+                canvas.itemconfig(transicao_info["origem"].id_circulo, fill="lightblue")
+                transicao_info["origem"] = None
+
+            status_acao.config(text=f"Laço criado para o estado {estado_clicado.nome}.")
+            
+    # Para qualquer outro modo, o clique duplo alterna o estado de aceitação
+    else:
+        toggle_aceitacao_event(event)
+
 
 
 # --- Funções de Modo e Tipo ---
@@ -433,6 +514,17 @@ def definir_tipo_automato(novo_tipo):
         atualizar_status_modo() # <-- USA A NOVA FUNÇÃO
         status_acao.config(text=f"Tipo alterado para {novo_tipo}.") # Mensagem de ação
         print(f"Tipo de autômato definido para: {tipo_automato_atual}")
+
+def definir_saida_estado(estado):
+    """Abre uma caixa de diálogo para definir o símbolo de saída de um estado (Moore)."""
+    nova_saida = simpledialog.askstring(
+        "Definir Saída de Estado (Moore)",
+        f"Digite o símbolo de saída para o estado '{estado.nome}':",
+        initialvalue=estado.simbolo_saida
+    )
+    if nova_saida is not None: # Permite definir uma saída vazia
+        estado.simbolo_saida = nova_saida
+        estado.atualizar_texto() # Chama o novo método para atualizar a tela
 
 
 
@@ -484,11 +576,12 @@ def simular_palavra():
     palavra = input_entry.get()
     resultado.config(text="Simulando...")
     sequencia_saida.config(text="Saída: ")
+    
     estado_inicial = next((est for est in estados.values() if est.inicial), None)
     if not estado_inicial:
         resultado.config(text="Erro: Nenhum estado inicial definido!", fg="orange")
         return
-    
+        
     if tipo_automato_atual == "AFD":
         is_valido, msg_erro = validar_automato_como_AFD()
         if not is_valido:
@@ -496,9 +589,20 @@ def simular_palavra():
             resultado.config(text="")
             return
         simular_passo_a_passo_AFD(palavra, estado_inicial)
-    elif tipo_automato_atual == "AFNe":
+
+    elif tipo_automato_atual in ["AFNe", "AFN"]: # <-- AGRUPAMOS OS DOIS AQUI
         estados_atuais = calcular_fecho_epsilon({estado_inicial})
         simular_passo_a_passo_AFNe(palavra, estados_atuais, "")
+        
+    elif tipo_automato_atual == "Mealy":
+        # Inicia o motor de simulação de Mealy
+        simular_passo_a_passo_Mealy(palavra, estado_inicial, "")
+
+    elif tipo_automato_atual == "Moore":
+        # Lógica inicial para Moore: a primeira saída é a do estado inicial
+        saida_inicial = estado_inicial.simbolo_saida
+        sequencia_saida.config(text=f"Saída: {saida_inicial}")
+        simular_passo_a_passo_Moore(palavra, estado_inicial, saida_inicial)
 
 def simular_passo_a_passo_AFD(palavra_restante, estado_atual):
     canvas.itemconfig(estado_atual.id_circulo, outline="blue", width=3)
@@ -552,6 +656,102 @@ def simular_passo_a_passo_AFNe(palavra_restante, estados_atuais, saida_acumulada
         simular_passo_a_passo_AFNe(proxima_palavra, proximos_estados_finais, nova_saida_acumulada)
     janela.after(700, ir_para_proximo_passo)
 
+def simular_passo_a_passo_Mealy(palavra_restante, estado_atual, saida_acumulada):
+    """
+    Motor de simulação para Máquinas de Mealy, com realce de estados e transições.
+    (Versão sem o token animado).
+    """
+    # Limpa realces anteriores e realça o estado atual
+    for est in estados.values(): canvas.itemconfig(est.id_circulo, outline="black", width=2)
+    canvas.itemconfig(estado_atual.id_circulo, outline="blue", width=3)
+
+    # Função de limpeza robusta para o final da simulação
+    def limpar_realces_finais():
+        for est in estados.values():
+            canvas.itemconfig(est.id_circulo, outline="black", width=2)
+
+    # Fim da palavra, a simulação termina
+    if not palavra_restante:
+        resultado.config(text="Simulação concluída!", fg="blue")
+        sequencia_saida.config(text=f"Saída Final: {saida_acumulada}")
+        janela.after(2000, limpar_realces_finais) # Limpa TUDO após 2s
+        return
+
+    simbolo_atual = palavra_restante[0]
+    proxima_palavra = palavra_restante[1:]
+    
+    transicao_encontrada = next((t for t in transicoes if t.origem == estado_atual and simbolo_atual in t.simbolos_entrada), None)
+            
+    if not transicao_encontrada:
+        resultado.config(text=f"Rejeitada ❌ (transição inválida para '{simbolo_atual}')", fg="red")
+        janela.after(2000, limpar_realces_finais) # Limpa TUDO após 2s
+        return
+
+    estado_destino = transicao_encontrada.destino
+    nova_saida_acumulada = saida_acumulada + transicao_encontrada.simbolo_saida
+    
+    # Realça a transição que está sendo usada
+    canvas.itemconfig(transicao_encontrada.tag_unica, fill="red")
+    
+    # Atualiza a UI
+    status_acao.config(text=f"Lendo '{simbolo_atual}', gerando '{transicao_encontrada.simbolo_saida}'...")
+    sequencia_saida.config(text=f"Saída: {nova_saida_acumulada}")
+    
+    def ir_para_proximo_passo():
+        # Restaura a cor da transição
+        canvas.itemconfig(transicao_encontrada.tag_unica, fill="black")
+        # Chama a si mesma para o próximo passo
+        simular_passo_a_passo_Mealy(proxima_palavra, estado_destino, nova_saida_acumulada)
+
+    # Pausa para o usuário ver o que aconteceu antes do próximo passo
+    janela.after(800, ir_para_proximo_passo)
+
+def simular_passo_a_passo_Moore(palavra_restante, estado_atual, saida_acumulada):
+    """Motor de simulação para Moore, com realce de estados e transições (SEM token)."""
+    # Limpa realces anteriores e realça o estado atual em azul
+    for est in estados.values():
+        canvas.itemconfig(est.id_circulo, outline="black", width=2)
+    canvas.itemconfig(estado_atual.id_circulo, outline="blue", width=3)
+    status_acao.config(text=f"No estado '{estado_atual.nome}', gerando saída '{estado_atual.simbolo_saida}'")
+
+    # Função de limpeza robusta para garantir que tudo volte ao normal no final
+    def limpar_realces_finais():
+        for est in estados.values():
+            canvas.itemconfig(est.id_circulo, outline="black", width=2)
+
+    # Se a palavra acabou, finaliza a simulação
+    if not palavra_restante:
+        resultado.config(text="Simulação concluída!", fg="blue")
+        sequencia_saida.config(text=f"Saída Final: {saida_acumulada}")
+        janela.after(2000, limpar_realces_finais)
+        return
+
+    simbolo_atual = palavra_restante[0]
+    proxima_palavra = palavra_restante[1:]
+
+    transicao_encontrada = next((t for t in transicoes if t.origem == estado_atual and simbolo_atual in t.simbolos_entrada), None)
+
+    if not transicao_encontrada:
+        resultado.config(text=f"Rejeitada ❌ (transição inválida para '{simbolo_atual}')", fg="red")
+        janela.after(2000, limpar_realces_finais)
+        return
+
+    # Realça em vermelho a transição que será usada
+    canvas.itemconfig(transicao_encontrada.tag_unica, fill="red")
+    
+    estado_destino = transicao_encontrada.destino
+    nova_saida_acumulada = saida_acumulada + estado_destino.simbolo_saida
+    
+    # Prepara a chamada para o próximo passo
+    def ir_para_proximo_passo():
+        # Restaura a cor da transição
+        canvas.itemconfig(transicao_encontrada.tag_unica, fill="black")
+        # Chama a si mesma recursivamente
+        simular_passo_a_passo_Moore(proxima_palavra, estado_destino, nova_saida_acumulada)
+
+    # Usa janela.after para criar uma pausa, em vez de animar o token
+    janela.after(800, ir_para_proximo_passo)
+
 
 
 # --- Funções de Arquivo ---
@@ -566,7 +766,7 @@ def novo_automato():
 
 def _salvar_dados_no_arquivo(caminho):
     dados = {
-        "estados": [{"nome": e.nome, "x": e.x, "y": e.y, "inicial": e.inicial, "aceitacao": e.aceitacao} for e in estados.values()],
+        "estados": [{"nome": e.nome, "x": e.x, "y": e.y, "inicial": e.inicial, "aceitacao": e.aceitacao, "simbolo_saida": e.simbolo_saida} for e in estados.values()],
         "transicoes": [{"origem": t.origem.nome, "destino": t.destino.nome, "simbolos_entrada": t.simbolos_entrada,
                         "simbolo_saida": t.simbolo_saida, "offset_x": t.offset_x, "offset_y": t.offset_y} for t in transicoes]
     }
@@ -602,8 +802,12 @@ def abrir_automato():
     novo_automato()
     caminho_arquivo_atual = arquivo
     for e_data in dados["estados"]:
-        estado = Estado(e_data["nome"], e_data["x"], e_data["y"], canvas)
+        estado = Estado(e_data["nome"], e_data["x"], e_data["y"], canvas) # Cria o estado
         estados[e_data["nome"]] = estado
+        # Adiciona a lógica para carregar o símbolo de saída
+        estado.simbolo_saida = e_data.get("simbolo_saida", "") # Define a saída, se houver
+        estado.atualizar_texto() # Atualiza o display no canvas
+
         if e_data.get("inicial"): estado.set_inicial()
         if e_data.get("aceitacao"): estado.set_aceitacao(True)
     if estados:
@@ -623,23 +827,25 @@ def corrigir_desvios_carregados():
         for t2 in transicoes:
             if t1 == t2 or tuple(sorted((id(t1), id(t2)))) in pares_verificados: continue
             if t1.origem == t2.destino and t1.destino == t2.origem:
-                if t1.offset_x == 0 and t2.offset_x == 0:
+                if t1.offset_x == 0 and t2.offset_x == 0: # Apenas corrige se ambos estiverem sem desvio
                     estado_origem, estado_destino = t1.origem, t1.destino
                     dist = math.dist((estado_origem.x, estado_origem.y), (estado_destino.x, estado_destino.y))
                     if dist == 0: dist = 1
                     vetor_x, vetor_y = (estado_destino.x - estado_origem.x) / dist, (estado_destino.y - estado_origem.y) / dist
                     vetor_perp_x, vetor_perp_y = -vetor_y, vetor_x
-                    offset_dist = 10
+                    offset_dist = 15 # Distância do desvio
                     t1.offset_x, t1.offset_y = vetor_perp_x * offset_dist, vetor_perp_y * offset_dist
                     t1.atualizar_posicao()
                     t2.offset_x, t2.offset_y = -vetor_perp_x * offset_dist, -vetor_perp_y * offset_dist
                     t2.atualizar_posicao()
-                pares_verificados.add(tuple(sorted((id(t1), id(t2)))))
+                pares_verificados.add(tuple(sorted((id(t1), id(t2))))) # Marca como verificado 
+
 
 # --- UI Setup ---
 janela = tk.Tk()
-janela.title("Mini-JFLAP em Python v9")
+janela.title("Mini-JFLAP em Python v10")
 janela.geometry("900x700")
+
 
 # --- Menu ---
 menu_bar = tk.Menu(janela)
@@ -651,14 +857,16 @@ menu_arquivo.add_command(label="Salvar como...", command=salvar_como)
 menu_arquivo.add_separator()
 menu_arquivo.add_command(label="Sair", command=janela.quit)
 menu_bar.add_cascade(label="Arquivo", menu=menu_arquivo)
-
+# --- NOVO: Menu Tipo de Autômato ---
 menu_tipo = tk.Menu(menu_bar, tearoff=0)
 menu_tipo.add_command(label="Autômato Finito Determinístico (AFD)", command=lambda: definir_tipo_automato("AFD"))
-menu_tipo.add_command(label="Autômato Finito Não Determinístico (AFNe)", command=lambda: definir_tipo_automato("AFNe"))
-menu_tipo.add_separator()
-menu_tipo.add_command(label="Máquina de Mealy [ EM BREVE ]", state="disabled")
-menu_tipo.add_command(label="Máquina de Moore [ EM BREVE ]", state="disabled")
-menu_tipo.add_command(label="Autômato com Pilha [ EM BREVE ]", state="disabled")
+menu_tipo.add_command(label="Autômato Finito Não Determinístico (AFN)", command=lambda: definir_tipo_automato("AFN")) # <-- NOVA OPÇÃO
+menu_tipo.add_command(label="Autômato Finito Não Determinístico com ε (AFNe)", command=lambda: definir_tipo_automato("AFNe")) # <-- NOME MAIS CLARO
+menu_tipo.add_separator() # Separador visual
+menu_tipo.add_command(label="Máquina de Mealy", command=lambda: definir_tipo_automato("Mealy")) # Habilitado
+menu_tipo.add_command(label="Máquina de Moore", command=lambda: definir_tipo_automato("Moore")) # <-- NOVA OPÇÃO
+menu_tipo.add_separator() # Separador visual
+menu_tipo.add_command(label="Autômato com Pilha [EM BREVE]", state="disabled")
 menu_bar.add_cascade(label="Tipo de Autômato", menu=menu_tipo)
 janela.config(menu=menu_bar)
 
@@ -697,7 +905,7 @@ btn_salvar = criar_botao_toolbar(toolbar, "salvar", "Salvar", salvar)
 canvas = tk.Canvas(janela, bg="white", highlightthickness=1, highlightbackground="black") # Borda preta
 canvas.pack(fill="both", expand=True, padx=10, pady=10) # Expande para preencher o espaço disponível
 canvas.bind("<ButtonPress-1>", iniciar_movimento) # Clique com o botão esquerdo
-canvas.bind("<Double-Button-1>", toggle_aceitacao_event) # Duplo clique para marcar/ desmarcar como aceitacao
+canvas.bind("<Double-Button-1>", gerenciar_clique_duplo) # Duplo clique com o botão esquerdo
 canvas.bind("<B1-Motion>", arrastar_objeto) # Arrasta com o botão esquerdo
 canvas.bind("<ButtonRelease-1>", finalizar_arraste) # Solta o botão esquerdo
 canvas.bind("<Button-2>", cancelar_criacao_transicao)  # Botão do meio para cancelar transição
@@ -730,4 +938,4 @@ sequencia_saida = tk.Label(painel_simulacao, text="Saída: ", font=("Arial", 12)
 sequencia_saida.pack(side=tk.LEFT, padx=10)
 
 ativar_modo_arrastar()
-janela.mainloop()
+janela.mainloop() # Inicia o loop principal da interface gráfica
