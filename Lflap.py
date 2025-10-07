@@ -1,12 +1,10 @@
-#nessa versão adicionamos a compatibilidade de arquivos com jflap
-
 import tkinter as tk
 from tkinter import messagebox, simpledialog, filedialog, colorchooser
 from PIL import Image, ImageTk
 import json
 import math
-import xml.etree.ElementTree as ET 
-from xml.dom import minidom
+import xml.etree.ElementTree as ET # <-- NOVA IMPORTAÇÃO
+from xml.dom import minidom        # <-- NOVA IMPORTAÇÃO
 import csv # <-- NOVA LINHA v11
 
 # --- Classes ---
@@ -152,18 +150,155 @@ class Transicao:
         # O redesenho completo é a forma mais segura de restaurar a cor
         self.atualizar_posicao()
 
+# --- Classes de Comando (para Undo/Redo) ---]
+class Comando:
+    """Classe base para todas as ações que podem ser desfeitas."""
+    def executar(self):
+        raise NotImplementedError
+    def desfazer(self):
+        raise NotImplementedError
+
+class ComandoCriarEstado(Comando):
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.estado_criado = None
+        self.nome_original = None # NOVO: Para lembrar o nome
+
+    def executar(self):
+        global contador_estados
+        
+        # Se estamos refazendo, usa o nome original. Senão, cria um novo nome.
+        if self.nome_original:
+            nome_estado = self.nome_original
+        else:
+            nome_estado = f"q{contador_estados}"
+            self.nome_original = nome_estado # Guarda o nome para o futuro
+            contador_estados += 1
+
+        self.estado_criado = Estado(nome_estado, self.x, self.y, canvas)
+        estados[nome_estado] = self.estado_criado
+        
+        # Lógica para definir como inicial (pode ser aprimorada no futuro)
+        is_initial = not any(est.inicial for est in estados.values() if est != self.estado_criado)
+        if is_initial:
+            self.estado_criado.set_inicial()
+
+        print(f"Comando Executado: Criar Estado {nome_estado}")
+        return True
+
+    def desfazer(self):
+        # Não precisamos mais mexer no contador global aqui
+        if self.estado_criado:
+            nome_estado = self.estado_criado.nome
+            self.estado_criado.destruir()
+            del estados[nome_estado]
+            print(f"Comando Desfeito: Apagar Estado {nome_estado}")
+
+class ComandoApagarTransicao(Comando):
+    def __init__(self, transicao_a_apagar):
+        # A "ordem" precisa saber qual transição ela é responsável por apagar.
+        self.transicao_apagada = transicao_a_apagar
+
+    def executar(self):
+        """Ação de apagar: remove a transição da lista e da tela."""
+        if self.transicao_apagada in transicoes:
+            self.transicao_apagada.destruir()
+            transicoes.remove(self.transicao_apagada)
+            print(f"Comando Executado: Apagar Transição")
+            return True
+        return False # Não executou se a transição já não existia
+
+    def desfazer(self):
+        """Ação de desfazer: coloca a transição de volta na lista e a redesenha."""
+        if self.transicao_apagada not in transicoes:
+            transicoes.append(self.transicao_apagada)
+            self.transicao_apagada.atualizar_posicao() # Redesenha a transição
+            print(f"Comando Desfeito: Restaurar Transição")
+
+class ComandoCriarTransicao(Comando):
+    def __init__(self, origem, destino):
+        self.origem = origem
+        self.destino = destino
+        self.transicao_criada = None
+        self.transicao_gemea = None
+        self.offset_original_gemea = (0, 0)
+
+    def executar(self):
+        # Cria a nova transição
+        self.transicao_criada = Transicao(self.origem, self.destino, canvas)
+        transicoes.append(self.transicao_criada)
+
+        # Procura por uma transição gêmea
+        self.transicao_gemea = next((t for t in transicoes if t.origem == self.destino and t.destino == self.origem), None)
+
+        if self.transicao_gemea:
+            # Guarda o estado original da gêmea antes de modificá-la
+            self.offset_original_gemea = (self.transicao_gemea.offset_x, self.transicao_gemea.offset_y)
+            
+            # Aplica o desvio em ambas
+            dist = math.dist((self.origem.x, self.origem.y), (self.destino.x, self.destino.y))
+            if dist == 0: dist = 1
+            vetor_x = (self.destino.x - self.origem.x) / dist
+            vetor_y = (self.destino.y - self.origem.y) / dist
+            vetor_perp_x, vetor_perp_y = -vetor_y, vetor_x
+            offset_dist = 15
+
+            self.transicao_criada.offset_x = vetor_perp_x * offset_dist
+            self.transicao_criada.offset_y = vetor_perp_y * offset_dist
+            self.transicao_criada.atualizar_posicao()
+
+            self.transicao_gemea.offset_x = -vetor_perp_x * offset_dist
+            self.transicao_gemea.offset_y = -vetor_perp_y * offset_dist
+            self.transicao_gemea.atualizar_posicao()
+        
+        print("Comando Executado: Criar Transição")
+        return True
+
+    def desfazer(self):
+        # Apaga a transição que foi criada
+        self.transicao_criada.destruir()
+        transicoes.remove(self.transicao_criada)
+
+        # Se uma transição gêmea foi modificada, restaura ela ao seu estado original
+        if self.transicao_gemea:
+            self.transicao_gemea.offset_x, self.transicao_gemea.offset_y = self.offset_original_gemea
+            self.transicao_gemea.atualizar_posicao()
+            
+        print("Comando Desfeito: Apagar Transição")
+
+class ComandoToggleAceitacao(Comando):
+    def __init__(self, estados_para_alternar):
+        # Esta classe é inteligente, ela aceita uma lista ou conjunto de estados
+        self.estados_afetados = list(estados_para_alternar)
+
+    def executar(self):
+        for estado in self.estados_afetados:
+            estado.toggle_aceitacao()
+        print(f"Comando Executado: Alternar aceitação para {len(self.estados_afetados)} estado(s).")
+        return True
+
+    def desfazer(self):
+        # A ação de desfazer um 'toggle' é simplesmente fazer o 'toggle' de novo!
+        for estado in self.estados_afetados:
+            estado.toggle_aceitacao()
+        print(f"Comando Desfeito: Alternar aceitação para {len(self.estados_afetados)} estado(s).")
+
+
 
 # --- Variáveis Globais ---
-contador_estados = 0
-estados = {}
-transicoes = []
-objeto_arrastado = {"id": None, "x_inicial": 0, "y_inicial": 0}
-modo_atual = "arrastar"
-transicao_info = {"origem": None}
-caminho_arquivo_atual = None
-tipo_automato_atual = "AFNe"
-itens_selecionados = set()
-caixa_selecao = None
+contador_estados = 0 # Contador para nomes automáticos de estados
+estados = {} # Dicionário de estados, chave é o nome do estado
+transicoes = [] 
+objeto_arrastado = {"id": None, "x_inicial": 0, "y_inicial": 0} # Estado ou "grupo"
+modo_atual = "arrastar" # Modos: arrastar, transicao, apagar, selecao
+transicao_info = {"origem": None} # Informação temporária para criação de transições
+caminho_arquivo_atual = None # Caminho do arquivo atualmente aberto
+tipo_automato_atual = "AFNe" # Padrão inicial
+itens_selecionados = set() # Conjunto de estados selecionados
+caixa_selecao = None # ID do retângulo de seleção
+historico_acoes = []      # Pilha de Undo
+historico_refazer = []    # Pilha de Redo
 
 
 # --- Funções "Detetive" ---
@@ -194,18 +329,20 @@ def iniciar_movimento(event):
             editar_rotulo_transicao(id_item_clicado)
             return
 
-    # --- LÓGICA DE MODOS CORRIGIDA ---
+    # --- LÓGICA DE MODOS CORRIGIDA E UNIFICADA ---
     if modo_atual == "arrastar":
         estado_clicado = encontrar_estado_clicado(event)
-        if estado_clicado:
-            dist = math.dist((event.x, event.y), (estado_clicado.x, estado_clicado.y))
-            if dist <= estado_clicado.raio:
-                objeto_arrastado["id"] = estado_clicado
-                objeto_arrastado["x_inicial"], objeto_arrastado["y_inicial"] = event.x, event.y
-            else:
-                criar_novo_estado(event.x, event.y)
+        
+        # A condição para ARRASTAR é: encontrar um estado E o clique ser DENTRO dele.
+        if estado_clicado and math.dist((event.x, event.y), (estado_clicado.x, estado_clicado.y)) <= estado_clicado.raio:
+            objeto_arrastado["id"] = estado_clicado
+            objeto_arrastado["x_inicial"], objeto_arrastado["y_inicial"] = event.x, event.y
         else:
-            criar_novo_estado(event.x, event.y)
+            # Em TODOS os outros casos (clique no fundo, ou fora de um estado), CRIA um novo estado.
+            # Usando o novo sistema de Comandos para permitir Undo/Redo.
+            comando = ComandoCriarEstado(event.x, event.y)
+            executar_comando(comando)
+            status_acao.config(text=f"Estado {comando.estado_criado.nome} criado.")
             
     elif modo_atual == "selecao":
         estado_clicado = encontrar_estado_clicado(event)
@@ -213,17 +350,11 @@ def iniciar_movimento(event):
         if estado_clicado:
             distancia_do_clique = math.dist((event.x, event.y), (estado_clicado.x, estado_clicado.y))
 
-        # CONDIÇÃO CORRIGIDA:
-        # Se o usuário clicou DENTRO de um estado que JÁ ESTAVA selecionado...
         if estado_clicado and estado_clicado in itens_selecionados and distancia_do_clique <= estado_clicado.raio:
-            # ...prepara para um arraste em grupo.
             objeto_arrastado["id"] = "grupo"
             objeto_arrastado["x_inicial"], objeto_arrastado["y_inicial"] = event.x, event.y
         else:
-            # Em TODOS os outros casos (clique no fundo, clique fora de um estado, etc.)...
-            # ...começa uma nova seleção.
-            for item in itens_selecionados: item.desselecionar()
-            itens_selecionados.clear()
+            limpar_selecao()
             caixa_selecao = canvas.create_rectangle(event.x, event.y, event.x, event.y, outline="blue", dash=(3, 5))
             objeto_arrastado["x_inicial"], objeto_arrastado["y_inicial"] = event.x, event.y
 
@@ -231,47 +362,58 @@ def iniciar_movimento(event):
         gerenciar_clique_transicao(event)
 
 def gerenciar_clique_arrastar(event):
+    """
+    Gerencia o clique no modo arrastar. Se o clique for em um estado,
+    prepara para arrastar. Se for no fundo, usa o sistema de COMANDOS
+    para criar um novo estado (permitindo o Undo/Redo).
+    """
     estado_clicado = encontrar_estado_clicado(event)
+    
+    # Se o clique foi dentro de um estado existente, prepara para arrastar
     if estado_clicado:
         dist = math.dist((event.x, event.y), (estado_clicado.x, estado_clicado.y))
         if dist <= estado_clicado.raio:
             objeto_arrastado["id"] = estado_clicado
             objeto_arrastado["x_inicial"], objeto_arrastado["y_inicial"] = event.x, event.y
-            return
-    criar_novo_estado(event.x, event.y)
+            return # Ação de arrastar definida, termina a função aqui
+
+    # Se a função chegou até aqui, significa que o clique foi no fundo do canvas.
+    # Em vez de chamar a função antiga, usamos o novo sistema de Comandos:
+    
+    # 1. Cria a "ordem de serviço" para criar um estado
+    comando = ComandoCriarEstado(event.x, event.y)
+    
+    # 2. Executa o comando e o adiciona ao histórico
+    executar_comando(comando)
+    
+    # 3. Atualiza o status para o usuário
+    status_acao.config(text=f"Estado {comando.estado_criado.nome} criado.")
 
 def gerenciar_clique_transicao(event):
     global transicao_info
     estado_clicado = encontrar_estado_clicado(event)
+
     if not estado_clicado:
-        if transicao_info["origem"]:
-            canvas.itemconfig(transicao_info["origem"].id_circulo, fill="lightblue")
-        transicao_info["origem"] = None
-        status_acao.config(text="Ação cancelada. Clique no estado de origem.")
+        cancelar_criacao_transicao(event) # Reutiliza a função de cancelar
         return
+
     if transicao_info["origem"] is None:
         transicao_info["origem"] = estado_clicado
         canvas.itemconfig(estado_clicado.id_circulo, fill="yellow")
-        status_acao.config(text=f"Origem: {estado_clicado.nome}. Clique no destino.")
+        status_acao.config(text=f"Origem: {estado_clicado.nome}. Clique no destino ou botão do meio para cancelar.")
     else:
         estado_origem = transicao_info["origem"]
         estado_destino = estado_clicado
-        transicao_gemea = next((t for t in transicoes if t.origem == estado_destino and t.destino == estado_origem), None)
-        nova_transicao = Transicao(estado_origem, estado_destino, canvas)
-        transicoes.append(nova_transicao)
-        if transicao_gemea:
-            dist = math.dist((estado_origem.x, estado_origem.y), (estado_destino.x, estado_destino.y))
-            if dist == 0: dist = 1
-            vetor_x, vetor_y = (estado_destino.x - estado_origem.x) / dist, (estado_destino.y - estado_origem.y) / dist
-            vetor_perp_x, vetor_perp_y = -vetor_y, vetor_x
-            offset_dist = 15 # Distância do desvio
-            nova_transicao.offset_x, nova_transicao.offset_y = vetor_perp_x * offset_dist, vetor_perp_y * offset_dist
-            nova_transicao.atualizar_posicao()
-            transicao_gemea.offset_x, transicao_gemea.offset_y = -vetor_perp_x * offset_dist, -vetor_perp_y * offset_dist
-            transicao_gemea.atualizar_posicao()
+
+        # --- MUDANÇA PRINCIPAL AQUI ---
+        # Em vez de fazer a lógica aqui, apenas criamos e executamos o comando
+        comando = ComandoCriarTransicao(estado_origem, estado_destino)
+        executar_comando(comando)
+        
+        # Limpa e reseta a UI
         canvas.itemconfig(estado_origem.id_circulo, fill="lightblue")
         transicao_info["origem"] = None
-        status_acao.config(text="Transição criada! Clique nela para editar o símbolo.")
+        status_acao.config(text="Transição criada! Clique nela para editar.")
 
 def editar_rotulo_transicao(id_item_clicado):
     """
@@ -336,14 +478,18 @@ def editar_rotulo_transicao(id_item_clicado):
             transicao_alvo.atualizar_simbolo(novo_rotulo_completo)
 
 def gerenciar_clique_apagar(event):
-    """Gerencia cliques no modo apagar, delegando a tarefa para a função apropriada."""
-    # Tenta apagar um estado primeiro
+    """
+    Gerencia cliques no modo apagar. Usa o sistema de Comandos para
+    ações que podem ser desfeitas.
+    """
+    # Primeiro, verifica se o clique foi num estado (lógica para apagar estado)
     estado_clicado = encontrar_estado_clicado(event)
     if estado_clicado:
-        apagar_estado(estado_clicado)
+        # Futuramente, aqui entrará o 'ComandoApagarEstado'
+        apagar_estado(estado_clicado) # Por enquanto, mantém a ação direta
         return
 
-    # Se não clicou em um estado, tenta apagar uma transição
+    # Agora, verifica se foi numa transição
     itens_proximos = canvas.find_closest(event.x, event.y)
     if not itens_proximos: return
     id_item_clicado = itens_proximos[0]
@@ -352,10 +498,13 @@ def gerenciar_clique_apagar(event):
     tag_alvo = next((t for t in tags if t.startswith("trans_")), None)
     if tag_alvo:
         transicao_para_apagar = next((t for t in transicoes if t.tag_unica == tag_alvo), None)
+        
         if transicao_para_apagar:
-            transicao_para_apagar.destruir()
-            transicoes.remove(transicao_para_apagar)
-            status_acao.config(text="Transição apagada com sucesso.")
+            # --- MUDANÇA IMPORTANTE AQUI ---
+            # Em vez de apagar diretamente, criamos e executamos o comando
+            comando = ComandoApagarTransicao(transicao_para_apagar)
+            executar_comando(comando)
+            status_acao.config(text="Transição apagada.")
 
 def arrastar_objeto(event):
     # Se estamos arrastando um único estado (no modo arrastar)
@@ -410,15 +559,6 @@ def finalizar_arraste(event):
     # Reseta o objeto arrastado em qualquer caso
     objeto_arrastado["id"] = None
 
-def criar_novo_estado(x, y):
-    global contador_estados
-    nome_estado = f"q{contador_estados}"
-    estado = Estado(nome_estado, x, y, canvas)
-    estados[nome_estado] = estado
-    if not any(est.inicial for est in estados.values() if est != estado):
-        estado.set_inicial()
-    contador_estados += 1
-
 def toggle_aceitacao_event(event):
     # Se estamos no meio da criação de uma transição, ignora o clique duplo
     # Impede a ação se estivermos no modo Mealy
@@ -436,8 +576,8 @@ def atualizar_transicoes_conectadas(estado_movido):
 
 def mostrar_menu_contexto(event):
     """
-    Exibe um menu de contexto inteligente: se o item clicado faz parte
-    de uma seleção, as ações são aplicadas ao grupo.
+    Exibe um menu de contexto inteligente que usa o sistema de Comandos
+    para ações que podem ser desfeitas.
     """
     estado_clicado = encontrar_estado_clicado(event)
     if not estado_clicado: return
@@ -448,14 +588,16 @@ def mostrar_menu_contexto(event):
     acao_em_grupo = estado_clicado in itens_selecionados and len(itens_selecionados) > 1
 
     # --- MONTAGEM DO MENU CONTEXTUAL ---
-
     if acao_em_grupo:
         # --- MENU PARA AÇÕES EM GRUPO ---
-        menu_contexto.add_command(
-            label=f"Marcar/Desmarcar Aceitação ({len(itens_selecionados)} itens)",
-            command=toggle_aceitacao_selecao
-        )
-        # Ação de renomear é desabilitada para grupos
+        if tipo_automato_atual not in ["Mealy", "Moore"]:
+            menu_contexto.add_command(
+                label=f"Marcar/Desmarcar Aceitação ({len(itens_selecionados)} itens)",
+                # --- MUDANÇA AQUI ---
+                # Usa o sistema de Comandos para a ação em grupo
+                command=lambda: executar_comando(ComandoToggleAceitacao(itens_selecionados))
+            )
+        
         menu_contexto.add_command(label="Renomear Estados...", state="disabled")
         menu_contexto.add_command(
             label=f"Alterar Cor ({len(itens_selecionados)} itens)...",
@@ -464,12 +606,17 @@ def mostrar_menu_contexto(event):
         menu_contexto.add_separator()
         menu_contexto.add_command(
             label=f"Apagar {len(itens_selecionados)} Estados Selecionados",
-            command=apagar_selecao # Usamos a função que já existe!
+            command=apagar_selecao
         )
     else:
-        # --- MENU PARA AÇÃO INDIVIDUAL (comportamento antigo) ---
+        # --- MENU PARA AÇÃO INDIVIDUAL (comportamento antigo, agora com Comandos) ---
         if tipo_automato_atual not in ["Mealy", "Moore"]:
-            menu_contexto.add_command(label="Marcar/Desmarcar como Aceitação", command=estado_clicado.toggle_aceitacao)
+            menu_contexto.add_command(
+                label="Marcar/Desmarcar como Aceitação",
+                # --- MUDANÇA AQUI ---
+                # Usa o sistema de Comandos para a ação individual
+                command=lambda: executar_comando(ComandoToggleAceitacao({estado_clicado}))
+            )
         if tipo_automato_atual == "Moore":
             menu_contexto.add_command(label="Definir Saída do Estado...", command=lambda: definir_saida_estado(estado_clicado))
         
@@ -595,6 +742,32 @@ def gerenciar_clique_duplo(event):
     else:
         toggle_aceitacao_event(event)
 
+def executar_comando(comando, vindo_do_refazer=False):
+    if comando.executar():
+        historico_acoes.append(comando)
+        if not vindo_do_refazer:
+            historico_refazer.clear()
+
+def desfazer_acao(event=None):
+    if not historico_acoes:
+        status_acao.config(text="Nada para desfazer.")
+        return
+    
+    comando = historico_acoes.pop()
+    comando.desfazer()
+    historico_refazer.append(comando)
+    status_acao.config(text="Ação desfeita.")
+
+def refazer_acao(event=None):
+    if not historico_refazer:
+        status_acao.config(text="Nada para refazer.")
+        return
+
+    comando = historico_refazer.pop()
+    # Avisa ao executor que esta ação está vindo do refazer
+    executar_comando(comando, vindo_do_refazer=True) 
+    status_acao.config(text="Ação refeita.")
+
 
 
 # --- Funções de Modo e Tipo ---
@@ -678,12 +851,6 @@ def apagar_selecao():
 def atalho_apagar_selecao(event):
     """Função adaptadora para o atalho da tecla Delete."""
     apagar_selecao()
-def toggle_aceitacao_selecao():
-    """Alterna o estado de aceitação para todos os estados selecionados."""
-    if not itens_selecionados: return
-    for estado in itens_selecionados:
-        estado.toggle_aceitacao()
-    status_acao.config(text=f"Estado de aceitação alterado para {len(itens_selecionados)} itens.")
 def mudar_cor_selecao():
     """Muda a cor de todos os estados selecionados."""
     if not itens_selecionados: return
@@ -1278,7 +1445,7 @@ toolbar.pack(side=tk.TOP, fill=tk.X, padx=2, pady=2)
 icones = {}
 try:
     # A linha de import original já nos dá o "Image"
-    nomes_icones = ["selecionar", "estado", "transicao", "apagar", "salvar"]
+    nomes_icones = ["selecionar", "estado", "transicao", "apagar", "salvar", "desfazer", "refazer"] # <-- NOVOS ÍCONES v11 e v12
     for nome in nomes_icones:
         # A correção está aqui, usando Image.Resampling.LANCZOS
         img = Image.open(f"icones/{nome}.png").resize((24, 24), Image.Resampling.LANCZOS)
@@ -1299,10 +1466,13 @@ def criar_botao_toolbar(parent, nome_icone, texto, comando):
 
 btn_estado = criar_botao_toolbar(toolbar, "estado", "Estado", ativar_modo_arrastar)
 btn_transicao = criar_botao_toolbar(toolbar, "transicao", "Transição", ativar_modo_transicao)
-btn_selecionar = criar_botao_toolbar(toolbar, "selecionar", "Selecionar", ativar_modo_selecao) # <-- NOVO BOTÃO
+btn_selecionar = criar_botao_toolbar(toolbar, "selecionar", "Selecionar", ativar_modo_selecao) # <-- NOVO BOTÃO v11
 btn_apagar = criar_botao_toolbar(toolbar, "apagar", "Apagar", ativar_modo_apagar)
 tk.Frame(toolbar, height=30, width=2, bg="grey").pack(side=tk.LEFT, padx=5, pady=2)
 btn_salvar = criar_botao_toolbar(toolbar, "salvar", "Salvar", salvar)
+btn_desfazer = criar_botao_toolbar(toolbar, "desfazer", "Desfazer", desfazer_acao) # <-- NOVO BOTÃO v12
+btn_refazer = criar_botao_toolbar(toolbar, "refazer", "Refazer", refazer_acao) # <-- NOVO BOTÃO v12
+tk.Frame(toolbar, height=30, width=2, bg="grey").pack(side=tk.LEFT, padx=5, pady=2)
 
 
 # --- Canvas ---
@@ -1316,6 +1486,8 @@ canvas.bind("<Button-2>", cancelar_criacao_transicao)  # Botão do meio para can
 canvas.bind("<Button-3>", mostrar_menu_contexto) # Botão direito para menu de contexto
 janela.bind("<Key>", gerenciar_atalhos_teclado) # Atalhos de teclado
 janela.bind("<Control-s>", atalho_salvar) # Atalho Ctrl+S para salvar
+janela.bind("<Control-z>", desfazer_acao) # Atalho Ctrl+Z para desfazer
+janela.bind("<Control-y>", refazer_acao) # Atalho Ctrl+Y para refazer
 
 
 # --- Painel Inferior (Status Bar) ---
