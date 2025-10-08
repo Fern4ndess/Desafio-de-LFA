@@ -70,19 +70,41 @@ class Estado:
     def desselecionar(self):
         self.canvas.itemconfig(self.id_circulo, outline="black", width=2)
 
+    # Dentro da class Estado
+    # Dentro da class Estado
+    def redesenhar(self):
+        """Redesenha todos os componentes visuais do estado no canvas."""
+        # Recria o círculo e o texto
+        self.id_circulo = self.canvas.create_oval(
+            self.x - self.raio, self.y - self.raio, self.x + self.raio, self.y + self.raio,
+            fill=self.canvas.itemcget(self.id_circulo, "fill"), # Mantém a cor atual
+            outline="black", width=2, tags=("estado", self.nome)
+        )
+        self.id_texto = self.canvas.create_text(
+            self.x, self.y, text=self.nome, font=("Arial", 12, "bold"), tags=("texto", self.nome)
+        )
+        
+        # Recria a marcação de inicial, se necessário
+        if self.inicial:
+            # Apaga qualquer seta antiga para evitar duplicatas
+            for item in self.canvas.find_withtag(f"seta_inicial_{self.nome}"): self.canvas.delete(item)
+            self.set_inicial() # Recria a seta
+            
+        # Recria a marcação de aceitação, se necessário
+        if self.aceitacao:
+            # Chama o método set_aceitacao diretamente, que é mais seguro
+            self.set_aceitacao(True)
+
 
 class Transicao:
     def __init__(self, origem, destino, canvas, simbolos_entrada="ε", simbolo_saida="", offset_x=0, offset_y=0):
         self.origem = origem
         self.destino = destino
         self.canvas = canvas
-        
-        # --- LÓGICA CORRETA: Símbolo de entrada é sempre uma LISTA ---
         if isinstance(simbolos_entrada, str):
             self.simbolos_entrada = [s.strip() for s in simbolos_entrada.split(',')]
         else:
             self.simbolos_entrada = simbolos_entrada
-            
         self.simbolo_saida = simbolo_saida
         self.tag_unica = f"trans_{id(self)}"
         self.offset_x = offset_x
@@ -92,7 +114,7 @@ class Transicao:
 
     def _get_rotulo_texto(self):
         global tipo_automato_atual
-        texto_entrada = ",".join(self.simbolos_entrada) # Junta a lista para exibir
+        texto_entrada = ",".join(self.simbolos_entrada)
         if tipo_automato_atual == "Mealy" and self.simbolo_saida:
             return f"{texto_entrada}/{self.simbolo_saida}"
         return texto_entrada
@@ -108,7 +130,6 @@ class Transicao:
         self.canvas.tag_raise("aceitacao")
 
     def _desenhar_linha_reta(self):
-        # ... (O resto deste método já está correto no seu código)
         x_o, y_o, x_d, y_d = self.origem.x, self.origem.y, self.destino.x, self.destino.y
         raio = self.origem.raio
         dist = math.dist((x_o, y_o), (x_d, y_d))
@@ -121,20 +142,27 @@ class Transicao:
         self.canvas.create_line(coords_linha, arrow=tk.LAST, fill="black", width=2, tags=(self.tag_unica, "transicao"))
         self.canvas.create_text(coords_texto, text=self._get_rotulo_texto(), font=("Arial", 10, "italic"), tags=(self.tag_unica, "rotulo"))
 
-
     def _desenhar_loop(self):
-        # ... (O resto deste método já está correto no seu código)
         x, y = self.origem.x, self.origem.y
         raio_estado, raio_loop = self.origem.raio, 20
         bounding_box = (x - raio_loop, y - (2 * raio_estado), x + raio_loop, y)
-        self.canvas.create_arc(bounding_box, start=210, extent=-240, style=tk.ARC, outline="black", width=2, tags=(self.tag_unica, "transicao"))
+        
+        # Garante que o arco tenha a tag_unica
+        self.canvas.create_arc(bounding_box, start=210, extent=-240, style=tk.ARC, 
+                               outline="black", width=2, tags=(self.tag_unica, "transicao"))
+        
         angulo_final_rad = math.radians(-30)
         centro_arco_x, centro_arco_y = x, y - raio_estado
         ponta_x = centro_arco_x + raio_loop * math.cos(angulo_final_rad)
         ponta_y = centro_arco_y - raio_loop * math.sin(angulo_final_rad)
         ponta1, ponta2, ponta3 = (ponta_x, ponta_y), (ponta_x - 10, ponta_y - 2), (ponta_x - 2, ponta_y + 8)
+        
+        # Garante que o polígono da seta tenha a tag_unica
         self.canvas.create_polygon(ponta1, ponta2, ponta3, fill="black", tags=(self.tag_unica, "transicao"))
+        
         coords_texto = (x, y - raio_estado - raio_loop - 8)
+        
+        # Garante que o texto do rótulo tenha a tag_unica
         self.canvas.create_text(coords_texto, text=self._get_rotulo_texto(), font=("Arial", 10, "italic"), tags=(self.tag_unica, "rotulo"))
 
     def atualizar_simbolo(self, novo_rotulo_completo):
@@ -147,8 +175,27 @@ class Transicao:
             self.simbolos_entrada = [s.strip() for s in simbolos_entrada_str.split(',')]
         self.atualizar_posicao()
 
+    # Dentro da class Transicao
     def destruir(self):
+        """Versão de depuração para encontrar o 'loop fantasma'."""
+        print("-" * 20)
+        print(f"--> Iniciando 'destruir' para a transição com tag: {self.tag_unica}")
+        
+        # Procura por todos os itens no canvas que têm essa tag
+        itens_encontrados = self.canvas.find_withtag(self.tag_unica)
+        
+        if not itens_encontrados:
+            print("!!! ALERTA: Nenhum componente visual foi encontrado com esta tag!")
+        else:
+            print(f"    Encontrados {len(itens_encontrados)} componentes visuais para apagar:")
+            for item_id in itens_encontrados:
+                # Para cada item, mostra suas tags
+                print(f"    - ID do item: {item_id}, Tags: {self.canvas.gettags(item_id)}")
+        
+        # Executa o comando de apagar
         self.canvas.delete(self.tag_unica)
+        print(f"<-- Comando de exclusão para '{self.tag_unica}' executado.")
+        print("-" * 20)
         
     def selecionar(self):
         self.canvas.itemconfig(self.tag_unica, fill="green")
@@ -271,7 +318,7 @@ class ComandoCriarTransicao(Comando):
             self.transicao_gemea.offset_x, self.transicao_gemea.offset_y = self.offset_original_gemea
             self.transicao_gemea.atualizar_posicao()
             
-        print("Comando Desfeito: Apagar Transição")
+        print("Comando Desfeito: Criar Transição")
 
 class ComandoToggleAceitacao(Comando):
     def __init__(self, estados_para_alternar):
@@ -423,43 +470,52 @@ class ComandoMover(Comando):
 
 class ComandoApagar(Comando):
     def __init__(self, itens_para_apagar):
-        self.estados_apagados = {item for item in itens_para_apagar if isinstance(item, Estado)}
-        self.transicoes_apagadas_diretamente = {item for item in itens_para_apagar if isinstance(item, Transicao)}
-        self.transicoes_apagadas_indiretamente = set()
+        # Guarda os itens que o usuário mandou apagar
+        self.itens_apagados_diretamente = set(itens_para_apagar)
+        # Guarda as transições que serão apagadas como consequência
+        self.transicoes_em_cascata = set()
 
     def executar(self):
-        # Encontra transições conectadas aos estados que serão apagados
-        for t in transicoes:
-            if t.origem in self.estados_apagados or t.destino in self.estados_apagados:
-                self.transicoes_apagadas_indiretamente.add(t)
-
-        todas_transicoes_a_apagar = self.transicoes_apagadas_diretamente.union(self.transicoes_apagadas_indiretamente)
-
-        for t in todas_transicoes_a_apagar:
-            t.destruir()
-            if t in transicoes: transicoes.remove(t)
+        estados_a_apagar = {item for item in self.itens_apagados_diretamente if isinstance(item, Estado)}
         
-        for e in self.estados_apagados:
-            e.destruir()
-            if e.nome in estados: del estados[e.nome]
+        # Encontra e guarda as transições conectadas aos estados que serão apagados
+        for t in transicoes:
+            if t.origem in estados_a_apagar or t.destino in estados_a_apagar:
+                if t not in self.itens_apagados_diretamente:
+                    self.transicoes_em_cascata.add(t)
 
-        print(f"Comando Executado: Apagar {len(self.estados_apagados)} estado(s) e {len(todas_transicoes_a_apagar)} transição(ões).")
+        # Junta todas as transições que devem sumir
+        todas_transicoes_a_apagar = self.itens_apagados_diretamente.union(self.transicoes_em_cascata)
+
+        # Executa a exclusão
+        for item in todas_transicoes_a_apagar:
+            if isinstance(item, Transicao) and item in transicoes:
+                item.destruir()
+                transicoes.remove(item)
+        
+        for estado in estados_a_apagar:
+            if estado.nome in estados:
+                estado.destruir()
+                del estados[estado.nome]
+        
+        itens_selecionados.clear()
+        print(f"Comando Executado: Apagar itens.")
         return True
 
     def desfazer(self):
-        # Recria os estados
-        for e in self.estados_apagados:
-            estados[e.nome] = e
-            # (Precisaríamos de um método "redesenhar" no Estado para ser perfeito)
-            # Por enquanto, a recriação do objeto já o redesenha.
-            # Vamos precisar ajustar a classe Estado para ter um método redesenhar.
-            # Por simplicidade agora, vamos pular o redesenho perfeito do estado.
+        # Restaura os estados primeiro
+        estados_a_restaurar = {item for item in self.itens_apagados_diretamente if isinstance(item, Estado)}
+        for estado in estados_a_restaurar:
+            estados[estado.nome] = estado
+            estado.redesenhar() # Usa o novo método para recriar na tela!
         
-        # Recria as transições
-        todas_transicoes_a_restaurar = self.transicoes_apagadas_diretamente.union(self.transicoes_apagadas_indiretamente)
+        # Restaura todas as transições depois
+        todas_transicoes_a_restaurar = self.itens_apagados_diretamente.union(self.transicoes_em_cascata)
         for t in todas_transicoes_a_restaurar:
-            transicoes.append(t)
-            t.atualizar_posicao()
+            if isinstance(t, Transicao):
+                if t not in transicoes:
+                    transicoes.append(t)
+                t.atualizar_posicao()
         
         print(f"Comando Desfeito: Restaurar itens apagados.")
 
