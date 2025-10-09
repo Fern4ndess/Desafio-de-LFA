@@ -160,7 +160,7 @@ class Transicao:
         # Garante que o polígono da seta tenha a tag_unica
         self.canvas.create_polygon(ponta1, ponta2, ponta3, fill="black", tags=(self.tag_unica, "transicao"))
         
-        coords_texto = (x, y - raio_estado - raio_loop - 8)
+        coords_texto = (x, y - raio_estado - raio_loop - 20)
         
         # Garante que o texto do rótulo tenha a tag_unica
         self.canvas.create_text(coords_texto, text=self._get_rotulo_texto(), font=("Arial", 10, "italic"), tags=(self.tag_unica, "rotulo"))
@@ -919,7 +919,17 @@ def desfazer_acao(event=None):
     comando = historico_acoes.pop()
     comando.desfazer()
     historico_refazer.append(comando)
+
+    # 🔧 Correção para loops visuais que não desaparecem
+    for item_id in canvas.find_all():
+        if canvas.type(item_id) == "arc":  # loops são desenhados como 'arc'
+            tags = canvas.gettags(item_id)
+            # Se a tag não pertence a nenhuma transição ativa, remove
+            if not any(t.tag_unica in tags for t in transicoes):
+                canvas.delete(item_id)
+                
     status_acao.config(text="Ação desfeita.")
+
 
 def refazer_acao(event=None):
     if not historico_refazer:
