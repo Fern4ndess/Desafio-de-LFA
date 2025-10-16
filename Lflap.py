@@ -97,27 +97,44 @@ class Estado:
 
 
 class Transicao:
+    # Dentro da class Transicao
     def __init__(self, origem, destino, canvas, simbolos_entrada="ε", simbolo_saida="", offset_x=0, offset_y=0):
         self.origem = origem
         self.destino = destino
         self.canvas = canvas
+        
         if isinstance(simbolos_entrada, str):
             self.simbolos_entrada = [s.strip() for s in simbolos_entrada.split(',')]
         else:
             self.simbolos_entrada = simbolos_entrada
+            
         self.simbolo_saida = simbolo_saida
+        
+        # --- NOVIDADE AQUI: Memória para o AP ---
+        self.para_desempilhar = "ε" 
+        self.para_empilhar = "ε"
+        # --- FIM DA NOVIDADE ---
+
         self.tag_unica = f"trans_{id(self)}"
         self.offset_x = offset_x
         self.offset_y = offset_y
         self.is_loop = (self.origem == self.destino)
         self.atualizar_posicao()
 
+    # Dentro da class Transicao
     def _get_rotulo_texto(self):
         global tipo_automato_atual
         texto_entrada = ",".join(self.simbolos_entrada)
-        if tipo_automato_atual == "Mealy" and self.simbolo_saida:
+
+        if tipo_automato_atual == "AP":
+            # Formato do Autômato com Pilha: a, b → c
+            return f"{texto_entrada},{self.para_desempilhar} → {self.para_empilhar}"
+        elif tipo_automato_atual == "Mealy" and self.simbolo_saida:
+            # Formato da Máquina de Mealy: a/1
             return f"{texto_entrada}/{self.simbolo_saida}"
-        return texto_entrada
+        else:
+            # Formato padrão para AFD, AFN, Moore
+            return texto_entrada
 
     def atualizar_posicao(self):
         self.canvas.delete(self.tag_unica)
@@ -166,13 +183,27 @@ class Transicao:
         self.canvas.create_text(coords_texto, text=self._get_rotulo_texto(), font=("Arial", 10, "italic"), tags=(self.tag_unica, "rotulo"))
 
     def atualizar_simbolo(self, novo_rotulo_completo):
-        partes = novo_rotulo_completo.split('/', 1)
-        simbolos_entrada_str = partes[0].strip()
-        self.simbolo_saida = partes[1].strip() if len(partes) > 1 else ""
-        if not simbolos_entrada_str or simbolos_entrada_str.lower() == "ε":
-            self.simbolos_entrada = ["ε"]
-        else:
-            self.simbolos_entrada = [s.strip() for s in simbolos_entrada_str.split(',')]
+        global tipo_automato_atual
+        
+        if tipo_automato_atual == "AP":
+            try:
+                parte_antes, parte_depois = novo_rotulo_completo.split('→')
+                partes_antes = parte_antes.split(',')
+                
+                self.simbolos_entrada = [partes_antes[0].strip() or "ε"]
+                self.para_desempilhar = partes_antes[1].strip() if len(partes_antes) > 1 else "ε"
+                self.para_empilhar = parte_depois.strip() or "ε"
+            except ValueError:
+                messagebox.showerror("Erro de Formato", "Formato inválido. Use: entrada, desempilha → empilha")
+        else: # Para Mealy, AFD, AFN, etc.
+            partes = novo_rotulo_completo.split('/', 1)
+            simbolos_entrada_str = partes[0].strip()
+            self.simbolo_saida = partes[1].strip() if len(partes) > 1 else self.simbolo_saida
+            if not simbolos_entrada_str:
+                self.simbolos_entrada = ["ε"]
+            else:
+                self.simbolos_entrada = [s.strip() for s in simbolos_entrada_str.split(',')]
+
         self.atualizar_posicao()
 
     # Dentro da class Transicao
@@ -414,33 +445,50 @@ class ComandoRenomearEstado(Comando):
 class ComandoEditarTransicao(Comando):
     def __init__(self, transicao):
         self.transicao = transicao
-        self.simbolos_antigos = None
-        self.simbolo_saida_antigo = None
-        self.novo_rotulo = None
+        # Guarda o estado completo antes da edição
+        self.estado_antigo = {}
+        self.novo_rotulo_str = None
 
     def executar(self):
-        # Guarda o estado antigo
-        self.simbolos_antigos = list(self.transicao.simbolos_entrada)
-        self.simbolo_saida_antigo = self.transicao.simbolo_saida
+        # 1. Guarda o estado antigo completo para o Desfazer
+        self.estado_antigo = {
+            "simbolos_entrada": list(self.transicao.simbolos_entrada),
+            "simbolo_saida": self.transicao.simbolo_saida,
+            "para_desempilhar": self.transicao.para_desempilhar,
+            "para_empilhar": self.transicao.para_empilhar
+        }
 
-        # Abre o diálogo para o usuário
+        # 2. Abre a caixa de diálogo correta com base no modo
         valor_inicial = self.transicao._get_rotulo_texto()
-        # A lógica de qual diálogo abrir está na função 'editar_rotulo_transicao'
-        # Aqui, vamos chamar a função, mas de uma forma que possamos capturar o resultado.
-        # Por simplicidade, vamos mover a lógica do diálogo para DENTRO do comando.
         
-        # (Lógica movida de editar_rotulo_transicao para cá)
-        if tipo_automato_atual in ["AFD", "AFN", "AFNe", "Moore"]:
-            self.novo_rotulo = simpledialog.askstring(f"Editar Símbolos ({tipo_automato_atual})", "Símbolos de entrada:", initialvalue=valor_inicial)
+        if tipo_automato_atual == "AP":
+            self.novo_rotulo_str = simpledialog.askstring(
+                "Editar Transição (AP)",
+                "Formato: entrada, desempilha → empilha\n(Use ε ou deixe em branco para vazio)",
+                initialvalue=valor_inicial
+            )
         elif tipo_automato_atual == "Mealy":
-            self.novo_rotulo = simpledialog.askstring("Editar Transição (Mealy)", "Formato: entrada / saida", initialvalue=valor_inicial)
+            self.novo_rotulo_str = simpledialog.askstring("Editar Transição (Mealy)", "Formato: entrada / saida", initialvalue=valor_inicial)
+        else: # AFD, AFN, AFNe, Moore
+            self.novo_rotulo_str = simpledialog.askstring(f"Editar Símbolos ({tipo_automato_atual})", "Símbolos de entrada (separados por vírgula):", initialvalue=valor_inicial)
 
-        if self.novo_rotulo is not None:
-            # Aplica a atualização (a função 'atualizar_simbolo' já parseia o texto)
-            self.transicao.atualizar_simbolo(self.novo_rotulo)
+        # Se o usuário não cancelou...
+        if self.novo_rotulo_str is not None:
+            # 3. Manda a transição se atualizar com a nova informação
+            # (A função 'atualizar_simbolo' agora precisa ser mais inteligente)
+            self.transicao.atualizar_simbolo(self.novo_rotulo_str)
             print("Comando Executado: Editar Transição")
             return True
         return False # Usuário cancelou
+
+    def desfazer(self):
+        # Restaura todos os valores antigos
+        self.transicao.simbolos_entrada = self.estado_antigo["simbolos_entrada"]
+        self.transicao.simbolo_saida = self.estado_antigo["simbolo_saida"]
+        self.transicao.para_desempilhar = self.estado_antigo["para_desempilhar"]
+        self.transicao.para_empilhar = self.estado_antigo["para_empilhar"]
+        self.transicao.atualizar_posicao() # Redesenha com os valores antigos
+        print("Comando Desfeito: Reverter Edição de Transição")
 
     def desfazer(self):
         # Restaura os valores antigos
@@ -1591,13 +1639,13 @@ menu_bar.add_cascade(label="Arquivo", menu=menu_arquivo)
 # --- NOVO: Menu Tipo de Autômato ---
 menu_tipo = tk.Menu(menu_bar, tearoff=0)
 menu_tipo.add_command(label="Autômato Finito Determinístico (AFD)", command=lambda: definir_tipo_automato("AFD"))
-menu_tipo.add_command(label="Autômato Finito Não Determinístico (AFN)", command=lambda: definir_tipo_automato("AFN")) # <-- NOVA OPÇÃO
-menu_tipo.add_command(label="Autômato Finito Não Determinístico com ε (AFNe)", command=lambda: definir_tipo_automato("AFNe")) # <-- NOME MAIS CLARO
+menu_tipo.add_command(label="Autômato Finito Não Determinístico (AFN)", command=lambda: definir_tipo_automato("AFN"))
+menu_tipo.add_command(label="Autômato Finito Não Determinístico com ε (AFNe)", command=lambda: definir_tipo_automato("AFNe"))
 menu_tipo.add_separator() # Separador visual
-menu_tipo.add_command(label="Máquina de Mealy", command=lambda: definir_tipo_automato("Mealy")) # Habilitado
-menu_tipo.add_command(label="Máquina de Moore", command=lambda: definir_tipo_automato("Moore")) # <-- NOVA OPÇÃO
+menu_tipo.add_command(label="Máquina de Mealy", command=lambda: definir_tipo_automato("Mealy"))
+menu_tipo.add_command(label="Máquina de Moore", command=lambda: definir_tipo_automato("Moore"))
 menu_tipo.add_separator() # Separador visual
-menu_tipo.add_command(label="Autômato com Pilha [EM BREVE]", state="disabled")
+menu_tipo.add_command(label="Autômato com Pilha (AP)", command=lambda: definir_tipo_automato("AP")) # v13
 menu_tipo.add_command(label="Máquina de Turing [EM BREVE]", state="disabled")
 menu_bar.add_cascade(label="Tipo de Autômato", menu=menu_tipo)
 janela.config(menu=menu_bar)
