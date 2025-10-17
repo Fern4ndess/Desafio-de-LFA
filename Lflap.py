@@ -584,6 +584,7 @@ historico_acoes = []      # Pilha de Undo
 historico_refazer = []    # Pilha de Redo
 comando_em_andamento = None # NOVO v12: Guarda um comando enquanto ele está sendo executado
 ponto_inicial_arraste = None # NOVO v12: Guarda o ponto inicial do arraste
+pilha_simulacao = [] # NOVO v13: Guarda o conteúdo da pilha durante a simulação
 
 
 # --- Funções "Detetive" ---
@@ -613,10 +614,12 @@ def iniciar_movimento(event):
             editar_rotulo_transicao(itens_proximos[0])
             return
 
-    # Se não for apagar nem editar, registra o ponto inicial para um possível arraste
-    ponto_inicial_arraste = (event.x, event.y)
+    # --- LÓGICA CORRIGIDA ---
+    # Agora, a lógica de cada modo é totalmente independente
 
     if modo_atual == "arrastar":
+        # Só define o ponto inicial se estivermos neste modo
+        ponto_inicial_arraste = (event.x, event.y)
         estado_clicado = encontrar_estado_clicado(event)
         if estado_clicado and math.dist((event.x, event.y), (estado_clicado.x, estado_clicado.y)) <= estado_clicado.raio:
             objeto_arrastado["id"] = estado_clicado
@@ -624,6 +627,8 @@ def iniciar_movimento(event):
             objeto_arrastado["id"] = None
             
     elif modo_atual == "selecao":
+        # Só define o ponto inicial se estivermos neste modo
+        ponto_inicial_arraste = (event.x, event.y)
         estado_clicado = encontrar_estado_clicado(event)
         if estado_clicado and estado_clicado in itens_selecionados:
             objeto_arrastado["id"] = "grupo"
@@ -632,6 +637,7 @@ def iniciar_movimento(event):
             caixa_selecao = canvas.create_rectangle(event.x, event.y, event.x, event.y, outline="blue", dash=(3, 5))
     
     elif modo_atual == "transicao":
+        # Este modo NÃO define o ponto_inicial_arraste, pois é um clique, não um arraste.
         gerenciar_clique_transicao(event)
 
 def arrastar_objeto(event):
@@ -759,8 +765,6 @@ def gerenciar_clique_transicao(event):
         estado_origem = transicao_info["origem"]
         estado_destino = estado_clicado
 
-        # --- MUDANÇA PRINCIPAL AQUI ---
-        # Em vez de fazer a lógica aqui, apenas criamos e executamos o comando
         comando = ComandoCriarTransicao(estado_origem, estado_destino)
         executar_comando(comando)
         
@@ -864,6 +868,12 @@ def atualizar_status_modo():
     # Capitalize() deixa a primeira letra maiúscula (ex: 'arrastar' -> 'Arrastar')
     texto_modo = modo_atual.capitalize().replace("Arrastar", "Criar/Arrastar")
     status_modo.config(text=f"Tipo: {tipo_automato_atual}  |  Modo: {texto_modo}")
+
+def atualizar_display_pilha():
+    """Atualiza a label na UI para mostrar o conteúdo atual da pilha."""
+    # Mostra o topo da pilha à esquerda
+    conteudo_formatado = "[" + " | ".join(reversed(pilha_simulacao)) + "]"
+    label_pilha.config(text=conteudo_formatado)
 
 def apagar_estado(estado_para_apagar):
     """
@@ -1726,6 +1736,14 @@ resultado = tk.Label(painel_simulacao, text="", font=("Arial", 12, "bold"))
 resultado.pack(side=tk.LEFT, padx=10)
 sequencia_saida = tk.Label(painel_simulacao, text="Saída: ", font=("Arial", 12))  
 sequencia_saida.pack(side=tk.LEFT, padx=10)
+
+# --- NOVO: Painel de Visualização da Pilha ---
+painel_pilha = tk.Frame(janela, bd=1, relief=tk.SUNKEN)
+painel_pilha.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=5)
+tk.Label(painel_pilha, text="Pilha:", font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=5)
+label_pilha = tk.Label(painel_pilha, text="[]", font=("Courier", 10), anchor=tk.W)
+label_pilha.pack(fill=tk.X, padx=5)
+
 
 ativar_modo_arrastar()
 janela.mainloop() # Inicia o loop principal da interface gráfica
