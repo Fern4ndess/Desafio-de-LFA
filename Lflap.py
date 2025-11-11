@@ -158,6 +158,12 @@ class Transicao:
             t for t in transicoes
             if t.origem == self.origem and t.destino == self.destino and t.is_loop
         ]
+
+        # --- LINHA ADICIONADA (v17): Ordena os loops para estabilidade ---
+        # A lista DEVE ser ordenada para que o 'indice_loop' seja estável
+        loops_mesmo_estado.sort(key=lambda t: t.tag_unica)
+        # --- FIM DA LINHA ADICIONADA ---
+
         indice_loop = loops_mesmo_estado.index(self) if self in loops_mesmo_estado else 0
 
         # ✅ Se for o primeiro loop, desenha o arco e a seta
@@ -290,9 +296,9 @@ historico_passos_mt = []
 modo_atual = "AFNe"  # valor inicial padrão
 
 
-# --- NOVA FUNÇÃO HELPER (Correção do Loop v15) ---
+# --- FUNÇÃO HELPER (Correção v17) ---
 def recalcular_offsets_loops(estado):
-    """Pega todos os loops de um estado e re-aplica os offsets verticais."""
+    """Pega todos os loops de um estado e FORÇA ELES A SE REDESENHAREM."""
     if not estado: return
     
     # 1. Encontra todos os loops para este estado
@@ -301,12 +307,12 @@ def recalcular_offsets_loops(estado):
     # 2. Ordena os loops (pela sua tag única) para ter uma ordem consistente
     loops_do_estado.sort(key=lambda t: t.tag_unica) 
     
-    # 3. Re-aplica os offsets
+    # 3. Força o redesenho (resetando os offsets para 0)
     for i, t_loop in enumerate(loops_do_estado):
-        t_loop.offset_y = -i * 30 # 0, -30, -60...
+        t_loop.offset_y = -i * 30
         t_loop.offset_x = 0 # Garante que não há desvio lateral
         t_loop.atualizar_posicao() # Força o redesenho
-# --- FIM DA NOVA FUNÇÃO ---
+# --- FIM DA FUNÇÃO ---
 
 
 # --- Funções "Detetive" ---
@@ -1310,7 +1316,7 @@ def novo_automato():
 def _salvar_dados_no_arquivo(caminho):
     # (Esta função permanece a mesma da v14)
     dados = {
-        "tipo": modo_atual,  # 👈 ADICIONE ESTA LINHA
+        "tipo": tipo_automato_atual,  # 👈 CORRIGIDO!
         "estados": [{"nome": e.nome, "x": e.x, "y": e.y, 
                      "inicial": e.inicial, "aceitacao": e.aceitacao, 
                      "simbolo_saida": e.simbolo_saida} 
@@ -1321,7 +1327,7 @@ def _salvar_dados_no_arquivo(caminho):
                 "simbolos_entrada": t.simbolos_entrada, "simbolo_saida": t.simbolo_saida,
                 "simbolo_pop": t.simbolo_pop, "string_push": t.string_push,
                 "simbolo_leitura": t.simbolo_leitura, "simbolo_escrita": t.simbolo_escrita,
-                "movimento_cabecote": t.movimento_cabecote,
+                "movimento_cabocote": t.movimento_cabecote,
                 "offset_x": t.offset_x, "offset_y": t.offset_y
             } 
             for t in transicoes
@@ -1649,7 +1655,7 @@ def corrigir_desvios_carregados():
 
 # --- UI Setup ---
 janela = tk.Tk()
-janela.title("Mini-JFLAP em Python v16 (Correção de Bugs)") # <-- Título atualizado
+janela.title("Mini-JFLAP em Python v17") # <-- Título atualizado
 janela.geometry("900x750") 
 
 # --- Menu ---
