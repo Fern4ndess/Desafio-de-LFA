@@ -6,9 +6,26 @@ import math
 import xml.etree.ElementTree as ET 
 from xml.dom import minidom 
 import csv 
+import sys
+import os
 
 # --- Constante Global ---
 SIMBOLO_BRANCO = "B" # Define o símbolo "branco" da fita de Turing
+
+
+# --- FUNÇÃO HELPER PARA PYINSTALLER ---
+def resource_path(relative_path):
+    """ Retorna o caminho absoluto para o recurso, funciona para dev e para PyInstaller """
+    try:
+        # PyInstaller cria uma pasta temporária e guarda o caminho em _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        # Se não estiver "congelado", o caminho é o do script
+        base_path = os.path.abspath(os.path.dirname(__file__))
+
+    return os.path.join(base_path, relative_path)
+# --- FIM DA FUNÇÃO HELPER ---
+
 
 # --- Classes ---
 class Estado:
@@ -1689,7 +1706,10 @@ icones = {}
 try:
     nomes_icones = ["selecionar", "estado", "transicao", "apagar", "salvar"]
     for nome in nomes_icones:
-        img = Image.open(f"icones/{nome}.png").resize((24, 24), Image.Resampling.LANCZOS)
+        # --- LINHA MODIFICADA ---
+        caminho_icone = resource_path(f"icones/{nome}.png")
+        # --- FIM DA MODIFICAÇÃO ---
+        img = Image.open(caminho_icone).resize((24, 24), Image.Resampling.LANCZOS)
         icones[nome] = ImageTk.PhotoImage(img)
     usar_icones = True
 except Exception as e:
