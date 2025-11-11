@@ -75,6 +75,7 @@ class Estado:
 
 class Transicao:
     # --- MODIFICADO (v16): Padrões da MT corrigidos para SIMBOLO_BRANCO ---
+    # --- MODIFICADO (v16): Padrões da MT corrigidos para SIMBOLO_BRANCO ---
     def __init__(self, origem, destino, canvas, simbolos_entrada="ε", simbolo_saida="", 
                  simbolo_pop="ε", string_push="ε", 
                  simbolo_leitura=SIMBOLO_BRANCO, simbolo_escrita=SIMBOLO_BRANCO, movimento_cabecote="S", 
@@ -98,7 +99,7 @@ class Transicao:
         
         self.tag_unica = f"trans_{id(self)}"
         self.offset_x = offset_x
-        self.offset_y = offset_y
+        self.offset_y = offset_y 
         self.is_loop = (self.origem == self.destino)
         self.atualizar_posicao()
 
@@ -270,7 +271,6 @@ class Transicao:
 
 
 # --- Variáveis Globais ---
-# (As mesmas da v14)
 contador_estados = 0
 estados = {}
 transicoes = []
@@ -287,6 +287,7 @@ celulas_fita_ids = []
 simulacao_mt_rodando = False
 estado_mt_atual = None
 historico_passos_mt = [] 
+modo_atual = "AFNe"  # valor inicial padrão
 
 
 # --- NOVA FUNÇÃO HELPER (Correção do Loop v15) ---
@@ -829,36 +830,41 @@ def mudar_cor_selecao():
             canvas.itemconfig(estado.id_circulo, fill=nova_cor[1]) 
         status_acao.config(text=f"Cor alterada para {len(itens_selecionados)} itens.")
 
-def definir_tipo_automato(novo_tipo):
+def definir_tipo_automato(novo_tipo, forcar=False):
     global tipo_automato_atual
     
     if simulacao_mt_rodando:
         messagebox.showwarning("Simulação em Andamento", "Resete a simulação da Máquina de Turing antes de mudar o tipo.")
         return
 
+    # Atualiza a UI da fita ANTES de qualquer confirmação
     if novo_tipo == "MT":
         painel_fita.pack(side=tk.BOTTOM, fill="x", padx=10, pady=5)
     else:
         painel_fita.pack_forget()
 
-    if estados or transicoes:
-        confirmar = messagebox.askyesno(
-            "Mudar Tipo de Autômato",
-            f"Você tem certeza que deseja mudar para {novo_tipo}?\n"
-            "Todo o trabalho não salvo no autômato atual será perdido."
-        )
-        if not confirmar:
-            if tipo_automato_atual == "MT":
-                painel_fita.pack(side=tk.BOTTOM, fill="x", padx=10, pady=5)
-            else:
-                painel_fita.pack_forget()
-            return
+    confirmar = True # Assume True se 'forcar'
+    if not forcar: # Só pergunta se não for forçado
+        if estados or transicoes:
+            confirmar = messagebox.askyesno(
+                "Mudar Tipo de Autômato",
+                f"Você tem certeza que deseja mudar para {novo_tipo}?\n"
+                "Todo o trabalho não salvo no autômato atual será perdido."
+            )
+            if not confirmar:
+                # Reverte a exibição da fita se o usuário cancelar
+                if tipo_automato_atual == "MT":
+                    painel_fita.pack(side=tk.BOTTOM, fill="x", padx=10, pady=5)
+                else:
+                    painel_fita.pack_forget()
+                return
 
-    novo_automato()
-    tipo_automato_atual = novo_tipo
-    atualizar_status_modo() 
-    status_acao.config(text=f"Tipo alterado para {novo_tipo}.") 
-    print(f"Tipo de autômato definido para: {tipo_automato_atual}")
+    if confirmar:
+        novo_automato()
+        tipo_automato_atual = novo_tipo
+        atualizar_status_modo() 
+        status_acao.config(text=f"Tipo alterado para {novo_tipo}.") 
+        print(f"Tipo de autômato definido para: {tipo_automato_atual}")
 
 def definir_saida_estado(estado):
     if simulacao_mt_rodando: return
@@ -1304,6 +1310,7 @@ def novo_automato():
 def _salvar_dados_no_arquivo(caminho):
     # (Esta função permanece a mesma da v14)
     dados = {
+        "tipo": modo_atual,  # 👈 ADICIONE ESTA LINHA
         "estados": [{"nome": e.nome, "x": e.x, "y": e.y, 
                      "inicial": e.inicial, "aceitacao": e.aceitacao, 
                      "simbolo_saida": e.simbolo_saida} 
@@ -1468,22 +1475,36 @@ def abrir_automato():
     
     if caminho_arquivo_atual.lower().endswith('.jff'):
         if importar_de_jflap_xml(caminho_arquivo_atual):
-            status_acao.config(text=f"Autômato JFLAP carregado de {arquivo.split('/')[-1]}")
+            # A própria função de importação já atualiza o status
+            pass 
+            
     elif caminho_arquivo_atual.lower().endswith('.json'):
+        # _carregar_dados_json agora faz a troca de modo E atualiza o status
         _carregar_dados_json(caminho_arquivo_atual)
-        status_acao.config(text=f"Autômato JSON carregado de {arquivo.split('/')[-1]}")
+        
     else:
         messagebox.showwarning("Erro de Formato", "Formato de arquivo não reconhecido. Tente .jff ou .json.")
     
     corrigir_desvios_carregados()
 
 def _carregar_dados_json(arquivo):
-    # (Esta função permanece a mesma da v14)
-    global estados, transicoes, contador_estados, caminho_arquivo_atual
+    global estados, transicoes, contador_estados, tipo_automato_atual, caminho_arquivo_atual
+
     try:
         with open(arquivo, "r", encoding="utf-8") as f:
             dados = json.load(f)
-        novo_automato() 
+        
+        # 1. Detecta o tipo do arquivo.
+        novo_tipo = dados.get("tipo", "AFNe") # Padrão AFNe se a chave "tipo" não existir
+        
+        # 2. CHAMA definir_tipo_automato FORÇADAMENTE
+        # Isto vai limpar o canvas (chamando novo_automato) e definir o modo
+        definir_tipo_automato(novo_tipo, forcar=True) 
+        
+        # 3. Restaura o caminho do arquivo (que novo_automato() limpou)
+        caminho_arquivo_atual = arquivo
+
+        # 4. Carrega os dados no canvas agora limpo e com o modo correto
         for e_data in dados["estados"]:
             estado = Estado(e_data["nome"], e_data["x"], e_data["y"], canvas)
             estados[e_data["nome"]] = estado
@@ -1491,12 +1512,14 @@ def _carregar_dados_json(arquivo):
             if e_data.get("aceitacao"): estado.set_aceitacao(True)
             estado.simbolo_saida = e_data.get("simbolo_saida", "")
             estado.atualizar_texto()
+            
         if estados:
             numeros_estado = [int(nome.replace('q', '')) for nome in estados.keys() if nome.startswith('q') and nome[1:].isdigit()]
             if numeros_estado:
                 contador_estados = max(numeros_estado) + 1
             else:
                 contador_estados = 1 
+                
         for t_data in dados["transicoes"]:
             origem, destino = estados.get(t_data["origem"]), estados.get(t_data["destino"])
             if not origem or not destino: continue
@@ -1506,39 +1529,39 @@ def _carregar_dados_json(arquivo):
                 t_data.get("simbolo_saida", ""),
                 t_data.get("simbolo_pop", "ε"),
                 t_data.get("string_push", "ε"),
-                # --- MODIFICADO (v16): Garante que 'ε' de JSON antigo vire 'B' ---
                 t_data.get("simbolo_leitura", SIMBOLO_BRANCO),
                 t_data.get("simbolo_escrita", SIMBOLO_BRANCO),
                 t_data.get("movimento_cabecote", "S"),
                 t_data.get("offset_x", 0), 
                 t_data.get("offset_y", 0)
             ))
-        #corrigir_desvios_carregados() # Removido, pois será chamado em 'abrir_automato'
+        
+        status_acao.config(text=f"Autômato JSON ({novo_tipo}) carregado de {arquivo.split('/')[-1]}")
+        
     except Exception as e:
         messagebox.showerror("Erro ao Carregar JSON", f"Não foi possível ler o ficheiro JSON:\n{e}")
-        novo_automato() 
+        novo_automato()
 
 def importar_de_jflap_xml(caminho_arquivo):
-    # (Esta função permanece a mesma da v14)
-    global estados, transicoes, contador_estados, tipo_automato_atual 
+    global estados, transicoes, contador_estados, tipo_automato_atual, caminho_arquivo_atual 
     try:
         tree = ET.parse(caminho_arquivo)
         raiz = tree.getroot()
-        novo_automato() 
+        
+        # 1. Detecta o tipo
         tipo_xml = raiz.find('type')
+        novo_tipo = "AFNe" # Padrão
         if tipo_xml is not None:
             if tipo_xml.text == "pda":
-                tipo_automato_atual = "AP"
-                print("Ficheiro JFLAP tipo 'pda' detectado.")
+                novo_tipo = "AP"
             elif tipo_xml.text == "turing":
-                tipo_automato_atual = "MT"
-                print("Ficheiro JFLAP tipo 'turing' detectado.")
-                painel_fita.pack(side=tk.BOTTOM, fill="x", padx=10, pady=5) 
-            else:
-                tipo_automato_atual = "AFNe"
-        else:
-            tipo_automato_atual = "AFNe"
-        atualizar_status_modo() 
+                novo_tipo = "MT"
+
+        # 2. CHAMA definir_tipo_automato FORÇADAMENTE
+        definir_tipo_automato(novo_tipo, forcar=True)
+        caminho_arquivo_atual = caminho_arquivo # Restaura o caminho
+        # --- FIM DA LÓGICA CORRIGIDA ---
+
         mapa_id_nome = {}
         for e_xml in raiz.findall('./automaton/state'):
             e_id = e_xml.get('id')
@@ -1552,10 +1575,12 @@ def importar_de_jflap_xml(caminho_arquivo):
                 estado.set_inicial()
             if e_xml.find('final') is not None:
                 estado.set_aceitacao(True)
+                
         if estados:
             numeros_estado = [int(n.replace('q', '')) for n in estados.keys() if n.startswith('q') and n[1:].isdigit()]
             if numeros_estado:
                 contador_estados = max(numeros_estado) + 1
+                
         for t_xml in raiz.findall('./automaton/transition'):
             origem = estados.get(mapa_id_nome.get(t_xml.find('from').text))
             destino = estados.get(mapa_id_nome.get(t_xml.find('to').text))
@@ -1587,7 +1612,6 @@ def importar_de_jflap_xml(caminho_arquivo):
                 simbolos_entrada=simbolo_input, simbolo_pop=simbolo_pop, string_push=string_push,
                 simbolo_leitura=simbolo_read, simbolo_escrita=simbolo_write, movimento_cabecote=move
             ))
-        #corrigir_desvios_carregados() # Removido, pois será chamado em 'abrir_automato'
         return True
     except Exception as e:
         messagebox.showerror("Erro de Importação JFLAP", f"Erro ao carregar o arquivo JFLAP: {e}")
